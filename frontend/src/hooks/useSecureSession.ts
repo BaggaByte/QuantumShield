@@ -126,6 +126,7 @@ export function useSecureSession() {
       case 'room_joined': {
         const pid = msg.participant_id as string;
         const role = msg.role as 'initiator' | 'responder';
+        const pCount = msg.participant_count as number;
         participantIdRef.current = pid;
         roleRef.current = role;
         setRoomState(prev => ({
@@ -133,7 +134,7 @@ export function useSecureSession() {
           roomId: msg.room_id as string,
           participantId: pid,
           role,
-          participantCount: msg.participant_count as number,
+          participantCount: pCount,
         }));
         setSession({
           sessionId: sessionIdRef.current,
@@ -142,8 +143,8 @@ export function useSecureSession() {
           messageCount: 0,
         });
 
-        // If responder, generate keys and send offer immediately
-        if (role === 'responder') {
+        // Only initiator starts handshake if peer is already in room
+        if (role === 'initiator' && pCount >= 2) {
           await initiateHandshake();
         }
         break;
@@ -243,8 +244,13 @@ export function useSecureSession() {
     if (!ws.current) return;
     setHandshakeState('exchanging');
 
+    if (msg.sessionId) {
+      sessionIdRef.current = msg.sessionId as string;
+    }
+
     const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
-    const mode = modeRef.current;
+    const mode = (msg.mode as CryptoMode) || modeRef.current;
+    modeRef.current = mode;
 
     // Generate our own X25519 keys if not done yet
     if (!myX25519.current) {
@@ -463,6 +469,7 @@ export function useSecureSession() {
     messages,
     handshakeState,
     connect,
+    initiateHandshake,
     sendMessage,
     disconnect,
   };

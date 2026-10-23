@@ -25,7 +25,7 @@ export default function ChatPage({ onSessionChange }: Props) {
   const [copied, setCopied] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { roomState, session, messages, handshakeState, connect, sendMessage, disconnect } = useSecureSession();
+  const { roomState, session, messages, handshakeState, connect, initiateHandshake, sendMessage, disconnect } = useSecureSession();
   const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
 
   useEffect(() => {
@@ -224,6 +224,15 @@ export default function ChatPage({ onSessionChange }: Props) {
                 <Shield className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="font-mono text-xs text-emerald-400">{session.sessionKeyFingerprint}</span>
               </div>
+            )}
+            {roomState.participantCount >= 2 && handshakeState !== "complete" && (
+              <button
+                onClick={() => initiateHandshake()}
+                className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors animate-pulse"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Start Handshake</span>
+              </button>
             )}
             <button onClick={handleDisconnect}
               className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">
