@@ -1,0 +1,132 @@
+// --- Crypto Types -------------------------------------------------------------
+
+export type CryptoMode = 'classical' | 'hybrid';
+
+export type HandshakeState =
+  | 'idle'
+  | 'generating_keys'
+  | 'waiting_peer'
+  | 'exchanging'
+  | 'deriving'
+  | 'complete'
+  | 'failed';
+
+export interface KeySizes {
+  x25519PublicKey: number;
+  mlkemPublicKey?: number;
+  mlkemCiphertext?: number;
+  totalHandshakeBytes: number;
+}
+
+export interface SessionState {
+  sessionId: string;
+  mode: CryptoMode;
+  handshakeState: HandshakeState;
+  handshakeStartedAt?: number;
+  handshakeDurationMs?: number;
+  keyGenDurationMs?: number;
+  sessionKeyFingerprint?: string;   // SHA-256 prefix of derived key (safe to display)
+  keySizes?: KeySizes;
+  messageCount: number;
+  errorMessage?: string;
+}
+
+// --- Message Types ------------------------------------------------------------
+
+export interface EncryptedPayload {
+  ciphertext: string;   // base64
+  nonce: string;        // base64
+  tag?: string;         // base64 (for GCM, tag is appended to ciphertext by noble)
+}
+
+export interface MessageMeta {
+  messageId: string;
+  sessionId: string;
+  senderId: string;
+  sequenceNumber: number;
+  algorithm: string;
+  timestamp: number;
+  encryptDurationMs?: number;
+  decryptDurationMs?: number;
+  authVerified?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  senderId: string;
+  senderRole: 'self' | 'peer';
+  plaintext: string;
+  encryptedPayload?: EncryptedPayload;
+  meta: MessageMeta;
+  displayedAt: number;
+  authVerified: boolean;
+}
+
+// --- Room / WebSocket Types ---------------------------------------------------
+
+export type ParticipantRole = 'initiator' | 'responder' | 'unknown';
+
+export interface RoomState {
+  roomId?: string;
+  participantId?: string;
+  role: ParticipantRole;
+  participantCount: number;
+  connected: boolean;
+  error?: string;
+}
+
+// --- Benchmark Types ---------------------------------------------------------
+
+export interface BenchmarkConfig {
+  mode: CryptoMode;
+  trials: number;
+  messageSizeBytes: number;
+  simulatedLatencyMs: number;
+  simulatedPacketLossPercent: number;
+}
+
+export interface TrialResult {
+  trial: number;
+  keyGenMs: number;
+  handshakeMs: number;
+  encryptMs: number;
+  decryptMs: number;
+  handshakeBytesTotal: number;
+  success: boolean;
+  error?: string;
+  simulated: boolean;
+}
+
+export interface BenchmarkResult {
+  config: BenchmarkConfig;
+  trials: TrialResult[];
+  summary: {
+    totalTrials: number;
+    successfulTrials: number;
+    failedTrials: number;
+    keyGen: { median: number; p95: number; min: number; max: number };
+    handshake: { median: number; p95: number; min: number; max: number };
+    encrypt: { median: number; p95: number; min: number; max: number };
+    decrypt: { median: number; p95: number; min: number; max: number };
+    handshakeBytesTotal: number;
+    x25519PublicKeyBytes: number;
+    mlkemPublicKeyBytes?: number;
+    mlkemCiphertextBytes?: number;
+  };
+  runAt: string;
+  notes: string;
+}
+
+// --- Security Test Types ------------------------------------------------------
+
+export type TestStatus = 'pending' | 'running' | 'pass' | 'fail' | 'skip';
+
+export interface SecurityTest {
+  id: string;
+  name: string;
+  description: string;
+  status: TestStatus;
+  details?: string;
+  durationMs?: number;
+}
