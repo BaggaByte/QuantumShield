@@ -122,8 +122,9 @@ export interface X25519KeyPair {
 }
 
 export function generateX25519KeyPair(): X25519KeyPair {
-  const privateKey = x25519.utils.randomPrivateKey();
-  const publicKey = x25519.getPublicKey(privateKey);
+  const keys = x25519.keygen();
+  const privateKey = keys.secretKey;
+  const publicKey = keys.publicKey;
   logBus.log('CRYPTO', 'x25519', 'Generated ephemeral X25519 keypair (32B pk, Curve25519)');
   return { privateKey, publicKey };
 }

@@ -208,145 +208,160 @@ export function useSecureSession() {
 
   const initiateHandshake = useCallback(async () => {
     if (!ws.current) return;
-    keyGenStartRef.current = performance.now();
-    handshakeStartRef.current = performance.now();
-    setHandshakeState('generating_keys');
+    try {
+      keyGenStartRef.current = performance.now();
+      handshakeStartRef.current = performance.now();
+      setHandshakeState('generating_keys');
 
-    const x25519Keys = generateX25519KeyPair();
-    myX25519.current = x25519Keys;
+      const x25519Keys = generateX25519KeyPair();
+      myX25519.current = x25519Keys;
 
-    let mlkemPublicKeyB64: string | undefined;
-    let mlkemKeys = null;
+      let mlkemPublicKeyB64: string | undefined;
+      let mlkemKeys = null;
 
-    if (modeRef.current === 'hybrid') {
-      mlkemKeys = generateMLKEMKeyPair();
-      myMLKEM.current = mlkemKeys;
-      mlkemPublicKeyB64 = bytesToBase64(mlkemKeys.publicKey);
+      if (modeRef.current === 'hybrid') {
+        mlkemKeys = generateMLKEMKeyPair();
+        myMLKEM.current = mlkemKeys;
+        mlkemPublicKeyB64 = bytesToBase64(mlkemKeys.publicKey);
+      }
+
+      const keyGenDurationMs = performance.now() - keyGenStartRef.current;
+      setSession(prev => prev ? { ...prev, keyGenDurationMs, handshakeState: 'exchanging' } : prev);
+      setHandshakeState('exchanging');
+
+      ws.current.send(JSON.stringify({
+        type: 'handshake_offer',
+        sessionId: sessionIdRef.current,
+        mode: modeRef.current,
+        x25519PublicKey: bytesToBase64(x25519Keys.publicKey),
+        mlkemPublicKey: mlkemPublicKeyB64,
+        role: roleRef.current,
+      }));
+    } catch (err) {
+      console.error('[QS] Handshake initiation failed:', err);
+      setHandshakeState('failed');
     }
-
-    const keyGenDurationMs = performance.now() - keyGenStartRef.current;
-    setSession(prev => prev ? { ...prev, keyGenDurationMs, handshakeState: 'exchanging' } : prev);
-    setHandshakeState('exchanging');
-
-    ws.current.send(JSON.stringify({
-      type: 'handshake_offer',
-      sessionId: sessionIdRef.current,
-      mode: modeRef.current,
-      x25519PublicKey: bytesToBase64(x25519Keys.publicKey),
-      mlkemPublicKey: mlkemPublicKeyB64,
-      role: roleRef.current,
-    }));
   }, []);
 
   // --- Handle Offer (peer sent offer to us) --------------------------------
 
   const handleHandshakeOffer = useCallback(async (msg: Record<string, unknown>) => {
     if (!ws.current) return;
-    setHandshakeState('exchanging');
+    try {
+      setHandshakeState('exchanging');
 
-    if (msg.sessionId) {
-      sessionIdRef.current = msg.sessionId as string;
+      if (msg.sessionId) {
+        sessionIdRef.current = msg.sessionId as string;
+      }
+
+      const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
+      const mode = (msg.mode as CryptoMode) || modeRef.current;
+      modeRef.current = mode;
+
+      // Generate our own X25519 keys if not done yet
+      if (!myX25519.current) {
+        myX25519.current = generateX25519KeyPair();
+      }
+
+      // X25519 agreement
+      const x25519SS = x25519SharedSecret(myX25519.current.privateKey, theirX25519PubKey);
+
+      let mlkemCiphertextB64: string | undefined;
+      let mlkemSS: Uint8Array | undefined;
+
+      if (mode === 'hybrid' && msg.mlkemPublicKey) {
+        const theirMLKEMPubKey = base64ToBytes(msg.mlkemPublicKey as string);
+        const { ciphertext, sharedSecret } = mlkemEncapsulate(theirMLKEMPubKey);
+        mlkemCiphertextB64 = bytesToBase64(ciphertext);
+        mlkemSS = sharedSecret;
+      }
+
+      setHandshakeState('deriving');
+      const { keyBytes, fingerprint } = await deriveSessionKey(
+        x25519SS, sessionIdRef.current, mode, mlkemSS
+      );
+      sessionKeyBytes.current = keyBytes;
+
+      const handshakeDurationMs = performance.now() - handshakeStartRef.current;
+
+      setHandshakeState('complete');
+      setSession(prev => prev ? {
+        ...prev,
+        handshakeState: 'complete',
+        handshakeDurationMs,
+        sessionKeyFingerprint: fingerprint,
+        keySizes: {
+          x25519PublicKey: KEY_SIZES.x25519.publicKey,
+          mlkemPublicKey: mode === 'hybrid' ? KEY_SIZES.mlkem768.publicKey : undefined,
+          mlkemCiphertext: mode === 'hybrid' ? KEY_SIZES.mlkem768.ciphertext : undefined,
+          totalHandshakeBytes: mode === 'hybrid'
+            ? KEY_SIZES.x25519.publicKey * 2 + KEY_SIZES.mlkem768.publicKey + KEY_SIZES.mlkem768.ciphertext
+            : KEY_SIZES.x25519.publicKey * 2,
+        },
+      } : prev);
+
+      // Send our answer
+      ws.current.send(JSON.stringify({
+        type: 'handshake_answer',
+        sessionId: sessionIdRef.current,
+        x25519PublicKey: bytesToBase64(myX25519.current.publicKey),
+        mlkemCiphertext: mlkemCiphertextB64,
+      }));
+
+      // Tell server handshake is done
+      ws.current.send(JSON.stringify({ type: 'handshake_done' }));
+    } catch (err) {
+      console.error('[QS] Error handling handshake offer:', err);
+      setHandshakeState('failed');
     }
-
-    const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
-    const mode = (msg.mode as CryptoMode) || modeRef.current;
-    modeRef.current = mode;
-
-    // Generate our own X25519 keys if not done yet
-    if (!myX25519.current) {
-      myX25519.current = generateX25519KeyPair();
-    }
-
-    // X25519 agreement
-    const x25519SS = x25519SharedSecret(myX25519.current.privateKey, theirX25519PubKey);
-
-    let mlkemCiphertextB64: string | undefined;
-    let mlkemSS: Uint8Array | undefined;
-
-    if (mode === 'hybrid' && msg.mlkemPublicKey) {
-      const theirMLKEMPubKey = base64ToBytes(msg.mlkemPublicKey as string);
-      const { ciphertext, sharedSecret } = mlkemEncapsulate(theirMLKEMPubKey);
-      mlkemCiphertextB64 = bytesToBase64(ciphertext);
-      mlkemSS = sharedSecret;
-    }
-
-    setHandshakeState('deriving');
-    const { keyBytes, fingerprint } = await deriveSessionKey(
-      x25519SS, sessionIdRef.current, mode, mlkemSS
-    );
-    sessionKeyBytes.current = keyBytes;
-
-    const handshakeDurationMs = performance.now() - handshakeStartRef.current;
-
-    setHandshakeState('complete');
-    setSession(prev => prev ? {
-      ...prev,
-      handshakeState: 'complete',
-      handshakeDurationMs,
-      sessionKeyFingerprint: fingerprint,
-      keySizes: {
-        x25519PublicKey: KEY_SIZES.x25519.publicKey,
-        mlkemPublicKey: mode === 'hybrid' ? KEY_SIZES.mlkem768.publicKey : undefined,
-        mlkemCiphertext: mode === 'hybrid' ? KEY_SIZES.mlkem768.ciphertext : undefined,
-        totalHandshakeBytes: mode === 'hybrid'
-          ? KEY_SIZES.x25519.publicKey * 2 + KEY_SIZES.mlkem768.publicKey + KEY_SIZES.mlkem768.ciphertext
-          : KEY_SIZES.x25519.publicKey * 2,
-      },
-    } : prev);
-
-    // Send our answer
-    ws.current.send(JSON.stringify({
-      type: 'handshake_answer',
-      sessionId: sessionIdRef.current,
-      x25519PublicKey: bytesToBase64(myX25519.current.publicKey),
-      mlkemCiphertext: mlkemCiphertextB64,
-    }));
-
-    // Tell server handshake is done
-    ws.current.send(JSON.stringify({ type: 'handshake_done' }));
   }, []);
 
   // --- Handle Answer (peer responded to our offer) --------------------------
 
   const handleHandshakeAnswer = useCallback(async (msg: Record<string, unknown>) => {
     if (!myX25519.current) return;
-    setHandshakeState('deriving');
+    try {
+      setHandshakeState('deriving');
 
-    const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
-    const x25519SS = x25519SharedSecret(myX25519.current.privateKey, theirX25519PubKey);
+      const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
+      const x25519SS = x25519SharedSecret(myX25519.current.privateKey, theirX25519PubKey);
 
-    let mlkemSS: Uint8Array | undefined;
+      let mlkemSS: Uint8Array | undefined;
 
-    if (modeRef.current === 'hybrid' && myMLKEM.current && msg.mlkemCiphertext) {
-      const ct = base64ToBytes(msg.mlkemCiphertext as string);
-      mlkemSS = mlkemDecapsulate(ct, myMLKEM.current.secretKey);
+      if (modeRef.current === 'hybrid' && myMLKEM.current && msg.mlkemCiphertext) {
+        const ct = base64ToBytes(msg.mlkemCiphertext as string);
+        mlkemSS = mlkemDecapsulate(ct, myMLKEM.current.secretKey);
+      }
+
+      const { keyBytes, fingerprint } = await deriveSessionKey(
+        x25519SS, sessionIdRef.current, modeRef.current, mlkemSS
+      );
+      sessionKeyBytes.current = keyBytes;
+
+      const handshakeDurationMs = performance.now() - handshakeStartRef.current;
+
+      setHandshakeState('complete');
+      setSession(prev => prev ? {
+        ...prev,
+        handshakeState: 'complete',
+        handshakeDurationMs,
+        sessionKeyFingerprint: fingerprint,
+        keySizes: {
+          x25519PublicKey: KEY_SIZES.x25519.publicKey,
+          mlkemPublicKey: modeRef.current === 'hybrid' ? KEY_SIZES.mlkem768.publicKey : undefined,
+          mlkemCiphertext: modeRef.current === 'hybrid' ? KEY_SIZES.mlkem768.ciphertext : undefined,
+          totalHandshakeBytes: modeRef.current === 'hybrid'
+            ? KEY_SIZES.x25519.publicKey * 2 + KEY_SIZES.mlkem768.publicKey + KEY_SIZES.mlkem768.ciphertext
+            : KEY_SIZES.x25519.publicKey * 2,
+        },
+      } : prev);
+
+      // Tell server handshake is done
+      ws.current?.send(JSON.stringify({ type: 'handshake_done' }));
+    } catch (err) {
+      console.error('[QS] Error handling handshake answer:', err);
+      setHandshakeState('failed');
     }
-
-    const { keyBytes, fingerprint } = await deriveSessionKey(
-      x25519SS, sessionIdRef.current, modeRef.current, mlkemSS
-    );
-    sessionKeyBytes.current = keyBytes;
-
-    const handshakeDurationMs = performance.now() - handshakeStartRef.current;
-
-    setHandshakeState('complete');
-    setSession(prev => prev ? {
-      ...prev,
-      handshakeState: 'complete',
-      handshakeDurationMs,
-      sessionKeyFingerprint: fingerprint,
-      keySizes: {
-        x25519PublicKey: KEY_SIZES.x25519.publicKey,
-        mlkemPublicKey: modeRef.current === 'hybrid' ? KEY_SIZES.mlkem768.publicKey : undefined,
-        mlkemCiphertext: modeRef.current === 'hybrid' ? KEY_SIZES.mlkem768.ciphertext : undefined,
-        totalHandshakeBytes: modeRef.current === 'hybrid'
-          ? KEY_SIZES.x25519.publicKey * 2 + KEY_SIZES.mlkem768.publicKey + KEY_SIZES.mlkem768.ciphertext
-          : KEY_SIZES.x25519.publicKey * 2,
-      },
-    } : prev);
-
-    // Tell server handshake is done
-    ws.current?.send(JSON.stringify({ type: 'handshake_done' }));
   }, []);
 
   // --- Send Encrypted Message -----------------------------------------------
