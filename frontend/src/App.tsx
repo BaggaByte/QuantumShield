@@ -26,16 +26,6 @@ export default function App() {
     mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number;
   } | null>(null);
 
-  const CurrentPage = () => {
-    switch (page) {
-      case "overview": return <OverviewPage onNavigate={(p) => setPage(p as Page)} globalSession={globalSession} />;
-      case "chat": return <ChatPage onSessionChange={setGlobalSession} />;
-      case "explorer": return <ExplorerPage />;
-      case "benchmark": return <BenchmarkPage />;
-      case "tests": return <SecurityTestPage />;
-    }
-  };
-
   return (
     <div className="min-h-screen bg-navy-950 text-white flex">
       {/* Sidebar */}
@@ -115,7 +105,11 @@ export default function App() {
 
         {/* Page Content */}
         <main className="flex-1 p-4 lg:p-8 overflow-y-auto">
-          <CurrentPage />
+          {page === "overview" && <OverviewPage onNavigate={(p) => setPage(p as Page)} globalSession={globalSession} />}
+          {page === "chat" && <ChatPage onSessionChange={setGlobalSession} />}
+          {page === "explorer" && <ExplorerPage />}
+          {page === "benchmark" && <BenchmarkPage />}
+          {page === "tests" && <SecurityTestPage />}
         </main>
       </div>
 
