@@ -18,8 +18,8 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-echo -e "\n[1/2] Starting FastAPI Backend on http://localhost:8000..."
-(cd "$BACKEND_DIR" && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000) &
+echo -e "\n[1/2] Starting FastAPI Backend on http://localhost:8001..."
+(cd "$BACKEND_DIR" && uvicorn app.main:app --reload --host 0.0.0.0 --port 8001) &
 BACKEND_PID=$!
 
 echo "[2/2] Starting Vite Frontend on http://localhost:5173..."
@@ -27,8 +27,8 @@ echo "[2/2] Starting Vite Frontend on http://localhost:5173..."
 FRONTEND_PID=$!
 
 echo -e "\nQuantumShield is running!"
-echo "  Backend API:  http://localhost:8000"
-echo "  API Docs:     http://localhost:8000/docs"
+echo "  Backend API:  http://localhost:8001"
+echo "  API Docs:     http://localhost:8001/docs"
 echo "  Frontend Web: http://localhost:5173"
 echo -e "\nPress Ctrl+C to stop both servers."
 

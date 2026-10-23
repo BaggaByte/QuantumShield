@@ -121,10 +121,10 @@ chmod +x scripts/*.sh
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8001
 ```
-- API is available at `http://localhost:8000`
-- Swagger Interactive Docs at `http://localhost:8000/docs`
+- API is available at `http://localhost:8001`
+- Swagger Interactive Docs at `http://localhost:8001/docs`
 
 **Frontend:**
 ```bash
