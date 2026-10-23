@@ -58,12 +58,27 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface SystemLogEntry {
+  id: string;
+  timestamp: string;
+  level: string;
+  source: 'backend' | 'client';
+  logger: string;
+  message: string;
+}
+
+export interface LogsResponse {
+  logs: SystemLogEntry[];
+  total_buffered: number;
+}
+
 export const api = {
   health: () => fetchJSON<HealthResponse>('health'),
   createRoom: () => fetchJSON<CreateRoomResponse>('rooms', { method: 'POST' }),
   getRoom: (roomId: string) => fetchJSON<RoomInfo>(`rooms/${roomId}`),
   securityStatus: () => fetchJSON<SecurityStatus>('api/security/status'),
   benchmarkConfig: () => fetchJSON<BenchmarkConfig>('api/benchmarks/config'),
+  systemLogs: (limit = 150) => fetchJSON<LogsResponse>(`api/system/logs?limit=${limit}`),
 };
 
 export function createWebSocket(roomId: string): WebSocket {

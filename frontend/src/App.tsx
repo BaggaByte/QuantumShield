@@ -7,6 +7,7 @@ import ChatPage from "@/pages/ChatPage";
 import ExplorerPage from "@/pages/ExplorerPage";
 import BenchmarkPage from "@/pages/BenchmarkPage";
 import SecurityTestPage from "@/pages/SecurityTestPage";
+import TerminalDrawer from "@/components/TerminalDrawer";
 
 type Page = "overview" | "chat" | "explorer" | "benchmark" | "tests";
 
@@ -117,6 +118,9 @@ export default function App() {
           <CurrentPage />
         </main>
       </div>
+
+      {/* Live System & Cryptographic Console */}
+      <TerminalDrawer />
     </div>
   );
 }

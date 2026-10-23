@@ -19,6 +19,7 @@ import { x25519 } from '@noble/curves/ed25519.js';
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { gcm } from '@noble/ciphers/aes.js';
 import { randomBytes } from '@noble/ciphers/utils.js';
+import { logBus } from '@/services/logger';
 
 // --- Utility helpers ----------------------------------------------------------
 
@@ -104,6 +105,12 @@ export async function deriveSessionKey(
   const keyBytes = new Uint8Array(exportedBuffer);
   const fingerprint = await fingerprintKey(keyBytes);
 
+  logBus.log(
+    'CRYPTO',
+    'hkdf',
+    `Derived 256-bit AES-GCM session key (${mode.toUpperCase()}) | Fingerprint: ${fingerprint}`
+  );
+
   return { keyBytes, fingerprint };
 }
 
@@ -117,11 +124,14 @@ export interface X25519KeyPair {
 export function generateX25519KeyPair(): X25519KeyPair {
   const privateKey = x25519.utils.randomPrivateKey();
   const publicKey = x25519.getPublicKey(privateKey);
+  logBus.log('CRYPTO', 'x25519', 'Generated ephemeral X25519 keypair (32B pk, Curve25519)');
   return { privateKey, publicKey };
 }
 
 export function x25519SharedSecret(myPrivKey: Uint8Array, theirPubKey: Uint8Array): Uint8Array {
-  return x25519.getSharedSecret(myPrivKey, theirPubKey);
+  const ss = x25519.getSharedSecret(myPrivKey, theirPubKey);
+  logBus.log('CRYPTO', 'x25519', 'Computed X25519 ECDH shared secret (32B)');
+  return ss;
 }
 
 // --- ML-KEM-768 --------------------------------------------------------------
@@ -133,6 +143,7 @@ export interface MLKEMKeyPair {
 
 export function generateMLKEMKeyPair(): MLKEMKeyPair {
   const keys = ml_kem768.keygen();
+  logBus.log('KEM', 'ml-kem-768', 'Generated ML-KEM-768 lattice keypair (FIPS 203: 1184B pk, 2400B sk)');
   return { publicKey: keys.publicKey, secretKey: keys.secretKey };
 }
 
@@ -141,11 +152,14 @@ export function mlkemEncapsulate(recipientPublicKey: Uint8Array): {
   sharedSecret: Uint8Array;
 } {
   const result = ml_kem768.encapsulate(recipientPublicKey);
+  logBus.log('KEM', 'ml-kem-768', 'Encapsulated ML-KEM-768 shared secret (1088B ciphertext produced)');
   return { ciphertext: result.cipherText, sharedSecret: result.sharedSecret };
 }
 
 export function mlkemDecapsulate(ciphertext: Uint8Array, secretKey: Uint8Array): Uint8Array {
-  return ml_kem768.decapsulate(ciphertext, secretKey);
+  const ss = ml_kem768.decapsulate(ciphertext, secretKey);
+  logBus.log('KEM', 'ml-kem-768', 'Decapsulated ML-KEM-768 ciphertext (recovered 32B PQ shared secret)');
+  return ss;
 }
 
 // --- AES-256-GCM -------------------------------------------------------------
@@ -176,11 +190,14 @@ export async function encryptMessage(
   combined.set(nonce, 0);
   combined.set(encrypted, nonce.length);
 
+  const durationMs = performance.now() - t0;
+  logBus.log('SECURITY', 'aes-256-gcm', `Encrypted message payload (${plaintext.length} chars) with fresh 96-bit IV [${durationMs.toFixed(2)}ms]`);
+
   return {
     ciphertext: bytesToBase64(combined),
     nonce: bytesToBase64(nonce),
     algorithm: 'AES-256-GCM',
-    durationMs: performance.now() - t0,
+    durationMs,
   };
 }
 
@@ -202,10 +219,13 @@ export async function decryptMessage(
 
   const cipher = gcm(sessionKeyBytes, nonce, aadBytes);
   const plaintextBytes = cipher.decrypt(encrypted);
+  const durationMs = performance.now() - t0;
+
+  logBus.log('SECURITY', 'aes-256-gcm', `Decrypted & verified AES-GCM 128-bit authentication tag (integrity verified) [${durationMs.toFixed(2)}ms]`);
 
   return {
     plaintext: new TextDecoder().decode(plaintextBytes),
-    durationMs: performance.now() - t0,
+    durationMs,
   };
 }
 
