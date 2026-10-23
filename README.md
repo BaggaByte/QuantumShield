@@ -100,7 +100,28 @@ crypto/
 - **Python 3.10+**
 - **Node.js 18+ & npm**
 
-### 1. Launch Everything in One Command
+### 🐳 Option 1: Run with Docker (Zero-Setup on Any Laptop)
+
+No need to install Python, Node, or manage dependencies. Runs anywhere with Docker installed:
+
+```bash
+docker compose up --build
+```
+
+- **Frontend Web UI:** [http://localhost:5173](http://localhost:5173)
+- **Backend API & Swagger:** [http://localhost:8001/docs](http://localhost:8001/docs)
+- **Healthcheck Endpoint:** [http://localhost:8001/health](http://localhost:8001/health)
+
+To stop:
+```bash
+docker compose down
+```
+
+---
+
+### 💻 Option 2: Local Installation (Manual)
+
+#### 1. Launch Everything in One Command
 
 **Windows (PowerShell):**
 ```powershell
@@ -115,7 +136,7 @@ chmod +x scripts/*.sh
 
 ---
 
-### 2. Manual Startup (Alternative)
+#### 2. Manual Startup (Step-by-step)
 
 **Backend:**
 ```bash
