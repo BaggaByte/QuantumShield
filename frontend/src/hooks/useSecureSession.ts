@@ -89,11 +89,13 @@ export function useSecureSession() {
     const newSessionId = `${roomId}-${Date.now().toString(36)}`;
     sessionIdRef.current = newSessionId;
 
+    setRoomState(prev => ({ ...prev, roomId, error: undefined }));
+
     const socket = createWebSocket(roomId);
     ws.current = socket;
 
     socket.onopen = () => {
-      setRoomState(prev => ({ ...prev, connected: true }));
+      setRoomState(prev => ({ ...prev, roomId, connected: true }));
       socket.send(JSON.stringify({ type: 'set_crypto_mode', mode }));
     };
 

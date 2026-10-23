@@ -2,7 +2,16 @@
  * QuantumShield - Backend API Client
  */
 
-const BASE_URL = '/';
+const getBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    // If running in Vite dev server (port 5173), point directly to FastAPI backend on 8001
+    if (window.location.port === '5173' || window.location.port === '5174') {
+      return `http://${window.location.hostname}:8001/`;
+    }
+    return '/';
+  }
+  return 'http://localhost:8001/';
+};
 
 export interface CreateRoomResponse {
   room_id: string;
@@ -39,7 +48,9 @@ export interface BenchmarkConfig {
 }
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, options);
+  const base = getBaseUrl();
+  const cleanPath = path.startsWith('/') ? path.slice(1) : path;
+  const res = await fetch(`${base}${cleanPath}`, options);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API ${path}: ${res.status} ${text}`);
@@ -57,6 +68,8 @@ export const api = {
 
 export function createWebSocket(roomId: string): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.host;
-  return new WebSocket(`${protocol}//${host}/ws/room/${roomId}`);
+  if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '5174')) {
+    return new WebSocket(`ws://${window.location.hostname}:8001/ws/room/${roomId}`);
+  }
+  return new WebSocket(`${protocol}//${window.location.host}/ws/room/${roomId}`);
 }

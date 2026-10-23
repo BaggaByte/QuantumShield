@@ -16,6 +16,7 @@ export default function ChatPage({ onSessionChange }: Props) {
   const [view, setView] = useState<"setup" | "chat">("setup");
   const [mode, setMode] = useState<CryptoMode>("hybrid");
   const [roomIdInput, setRoomIdInput] = useState("");
+  const [activeRoomId, setActiveRoomId] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -23,6 +24,8 @@ export default function ChatPage({ onSessionChange }: Props) {
   const [selectedMsg, setSelectedMsg] = useState<ChatMessage | null>(null);
   const [copied, setCopied] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
 
   const { roomState, session, messages, handshakeState, connect, sendMessage, disconnect } = useSecureSession();
 
@@ -48,6 +51,7 @@ export default function ChatPage({ onSessionChange }: Props) {
     setIsCreating(true);
     try {
       const { room_id } = await api.createRoom();
+      setActiveRoomId(room_id);
       await connect(room_id, mode);
       setView("chat");
     } catch (e) {
@@ -58,10 +62,12 @@ export default function ChatPage({ onSessionChange }: Props) {
   };
 
   const handleJoin = async () => {
-    if (!roomIdInput.trim()) return;
+    const code = roomIdInput.trim().toUpperCase();
+    if (!code) return;
     setIsJoining(true);
     try {
-      await connect(roomIdInput.trim().toUpperCase(), mode);
+      setActiveRoomId(code);
+      await connect(code, mode);
       setView("chat");
     } catch (e) {
       alert("Failed to join room: " + (e as Error).message);
@@ -89,8 +95,8 @@ export default function ChatPage({ onSessionChange }: Props) {
   };
 
   const copyRoomId = () => {
-    if (roomState.roomId) {
-      navigator.clipboard.writeText(roomState.roomId);
+    if (currentRoomCode) {
+      navigator.clipboard.writeText(currentRoomCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -100,6 +106,7 @@ export default function ChatPage({ onSessionChange }: Props) {
     disconnect();
     setView("setup");
     setRoomIdInput("");
+    setActiveRoomId("");
   };
 
   const handshakeColor = {
@@ -198,13 +205,14 @@ export default function ChatPage({ onSessionChange }: Props) {
             <div className={`w-2.5 h-2.5 rounded-full ${roomState.connected ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-white font-mono font-semibold">{roomState.roomId}</span>
-                <button onClick={copyRoomId} className="text-slate-400 hover:text-cyan-400 transition-colors">
+                <span className="text-white font-mono font-bold text-base px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">{currentRoomCode}</span>
+                <button onClick={copyRoomId} className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 rounded-lg transition-colors font-medium">
                   <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Code</span>
                 </button>
-                {copied && <span className="text-xs text-emerald-400">Copied!</span>}
+                {copied && <span className="text-xs text-emerald-400 font-semibold animate-pulse">Copied!</span>}
               </div>
-              <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
+              <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
                 <span>{roomState.participantCount}/2 participants</span>
                 <span className="capitalize">{mode} mode</span>
                 <span className={handshakeColor[handshakeState]}>{handshakeLabel[handshakeState]}</span>
@@ -240,8 +248,16 @@ export default function ChatPage({ onSessionChange }: Props) {
               <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin-slow" />
             </div>
             <div>
-              <p className="text-white font-medium">Waiting for peer…</p>
-              <p className="text-slate-400 text-sm mt-1">Share room code <span className="text-cyan-400 font-mono">{roomState.roomId}</span> with your peer</p>
+              <p className="text-white font-semibold text-lg">Waiting for peer to join…</p>
+              <p className="text-slate-400 text-sm mt-1">Share this room code with your peer:</p>
+              <div className="mt-3 inline-flex items-center gap-3 px-4 py-2 bg-navy-900 border border-cyan-500/40 rounded-xl shadow-lg">
+                <span className="text-cyan-400 font-mono text-xl font-bold tracking-widest">{currentRoomCode}</span>
+                <button onClick={copyRoomId} className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors">
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy</span>
+                </button>
+              </div>
+              {copied && <p className="text-xs text-emerald-400 mt-2 font-medium">Copied to clipboard!</p>}
             </div>
           </div>
         )}
