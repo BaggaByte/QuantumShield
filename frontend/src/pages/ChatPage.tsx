@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
-  CheckCircle, XCircle, AlertCircle, ChevronDown, Key,
-  Loader, Info, LogOut, RefreshCw
+  CheckCircle, XCircle, AlertCircle, Key,
+  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check
 } from "lucide-react";
 import { api } from "@/services/api";
 import { useSecureSession } from "@/hooks/useSecureSession";
@@ -21,11 +21,24 @@ export default function ChatPage({ onSessionChange }: Props) {
   const [isJoining, setIsJoining] = useState(false);
   const [inputText, setInputText] = useState("");
   const [sendError, setSendError] = useState("");
-  const [selectedMsg, setSelectedMsg] = useState<ChatMessage | null>(null);
+  const [wireModalMsg, setWireModalMsg] = useState<ChatMessage | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedWire, setCopiedWire] = useState(false);
+  const [showQuantumSim, setShowQuantumSim] = useState(false);
+  const [quantumAttacking, setQuantumAttacking] = useState(false);
+  const [attackResult, setAttackResult] = useState<{
+    status: "compromised" | "protected";
+    details: string;
+    revealedText?: string;
+  } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { roomState, session, messages, handshakeState, connect, initiateHandshake, sendMessage, disconnect } = useSecureSession();
+  const {
+    roomState, session, messages, handshakeState, connect,
+    initiateHandshake, sendMessage, disconnect
+  } = useSecureSession();
+
   const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
 
   useEffect(() => {
@@ -106,19 +119,43 @@ export default function ChatPage({ onSessionChange }: Props) {
     setView("setup");
     setRoomIdInput("");
     setActiveRoomId("");
+    setAttackResult(null);
   };
 
-  const handshakeColor = {
-    idle: "text-slate-400", generating_keys: "text-amber-400",
-    waiting_peer: "text-amber-400", exchanging: "text-blue-400",
-    deriving: "text-blue-400", complete: "text-emerald-400", failed: "text-red-400",
+  const runQuantumAttack = () => {
+    if (messages.length === 0) {
+      alert("Send at least one message first to simulate a quantum harvest attack!");
+      return;
+    }
+    setQuantumAttacking(true);
+    setAttackResult(null);
+
+    const targetMsg = messages[messages.length - 1];
+
+    setTimeout(() => {
+      setQuantumAttacking(false);
+      if (mode === "classical") {
+        setAttackResult({
+          status: "compromised",
+          details: "Shor's Algorithm solved the Discrete Logarithm Problem (DLP) on Curve25519 in polynomial time O((log N)³). The private scalar was computed, classical ECDH shared secret derived, and AES-256-GCM key recovered!",
+          revealedText: targetMsg.plaintext,
+        });
+      } else {
+        setAttackResult({
+          status: "protected",
+          details: "Shor's Algorithm successfully broke the classical X25519 secret, BUT failed against ML-KEM-768. The Module Learning With Errors (M-LWE) lattice hardness assumption remains quantum-resistant. Because HKDF requires BOTH secrets, the session key cannot be computed!",
+          revealedText: undefined,
+        });
+      }
+    }, 1400);
   };
 
-  const handshakeLabel = {
-    idle: "Waiting…", generating_keys: "Generating keys…",
-    waiting_peer: "Waiting for peer…", exchanging: "Exchanging keys…",
-    deriving: "Deriving session key…", complete: "Established ?", failed: "Failed ?",
-  };
+  const handshakeSteps = [
+    { id: "keygen", name: "1. Ephemeral Keygen", done: handshakeState === "exchanging" || handshakeState === "deriving" || handshakeState === "complete" },
+    { id: "exchange", name: "2. Key Encapsulation", done: handshakeState === "deriving" || handshakeState === "complete" },
+    { id: "derive", name: "3. Dual-HKDF Combiner", done: handshakeState === "complete" },
+    { id: "complete", name: "4. AES-256-GCM Active", done: handshakeState === "complete" },
+  ];
 
   if (view === "setup") {
     return (
@@ -155,7 +192,7 @@ export default function ChatPage({ onSessionChange }: Props) {
           </div>
           {mode === "hybrid" && (
             <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3 text-xs text-emerald-400">
-              ?? Hybrid mode adds ML-KEM-768 post-quantum protection against harvest-now-decrypt-later attacks
+              🛡️ Hybrid mode adds ML-KEM-768 post-quantum protection against harvest-now-decrypt-later attacks
             </div>
           )}
         </div>
@@ -196,15 +233,15 @@ export default function ChatPage({ onSessionChange }: Props) {
 
   // --- Chat View -------------------------------------------------------------
   return (
-    <div className="flex flex-col h-[calc(100vh-10rem)] animate-fade-in">
+    <div className="flex flex-col h-[calc(100vh-10rem)] animate-fade-in relative">
       {/* Chat Header */}
-      <div className="bg-navy-800 border border-white/10 rounded-xl p-4 mb-4">
+      <div className="bg-navy-800 border border-white/10 rounded-xl p-4 mb-3 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className={`w-2.5 h-2.5 rounded-full ${roomState.connected ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-white font-mono font-bold text-base px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">{currentRoomCode}</span>
+                <span className="text-white font-mono font-bold text-base px-2.5 py-0.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">{currentRoomCode}</span>
                 <button onClick={copyRoomId} className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 rounded-lg transition-colors font-medium">
                   <Copy className="w-3.5 h-3.5" />
                   <span>Copy Code</span>
@@ -214,7 +251,9 @@ export default function ChatPage({ onSessionChange }: Props) {
               <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
                 <span>{roomState.participantCount}/2 participants</span>
                 <span className="capitalize">{mode} mode</span>
-                <span className={handshakeColor[handshakeState]}>{handshakeLabel[handshakeState]}</span>
+                <span className={handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}>
+                  {handshakeState === "complete" ? "Established ✓" : "Negotiating keys…"}
+                </span>
               </div>
             </div>
           </div>
@@ -225,6 +264,15 @@ export default function ChatPage({ onSessionChange }: Props) {
                 <span className="font-mono text-xs text-emerald-400">{session.sessionKeyFingerprint}</span>
               </div>
             )}
+            <button
+              onClick={() => setShowQuantumSim(!showQuantumSim)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                showQuantumSim ? "bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40" : "bg-white/5 text-slate-300 hover:text-white border border-white/10"
+              }`}
+            >
+              <Atom className="w-3.5 h-3.5 text-fuchsia-400" />
+              <span>Quantum Simulator</span>
+            </button>
             {roomState.participantCount >= 2 && handshakeState !== "complete" && (
               <button
                 onClick={() => initiateHandshake()}
@@ -240,16 +288,83 @@ export default function ChatPage({ onSessionChange }: Props) {
             </button>
           </div>
         </div>
-        {/* Algorithm badges */}
-        <div className="flex items-center gap-2 mt-3 flex-wrap">
-          {["X25519", mode === "hybrid" ? "ML-KEM-768" : null, "HKDF-SHA-256", "AES-256-GCM"].filter(Boolean).map(alg => (
-            <span key={alg} className="text-xs bg-navy-700 border border-white/10 text-slate-300 px-2 py-0.5 rounded font-mono">{alg}</span>
+
+        {/* Live Handshake Stepper Bar */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-white/5">
+          {handshakeSteps.map((step, idx) => (
+            <div
+              key={step.id}
+              className={`flex items-center gap-2 p-2 rounded-lg border text-xs font-mono transition-all ${
+                step.done
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : handshakeState !== "idle" && idx === 0
+                  ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300 animate-pulse"
+                  : "bg-navy-900 border-white/5 text-slate-500"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${step.done ? "bg-emerald-400" : "bg-slate-600"}`} />
+              <span className="truncate">{step.name}</span>
+            </div>
           ))}
         </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-4">
+      {/* Quantum Adversary Simulation Panel */}
+      {showQuantumSim && (
+        <div className="bg-navy-900/95 border border-fuchsia-500/30 rounded-xl p-4 mb-3 space-y-3 backdrop-blur shadow-2xl animate-fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Atom className="w-5 h-5 text-fuchsia-400 animate-spin-slow" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                Harvest Now, Decrypt Later (HNDL) Adversary Simulator
+              </h3>
+            </div>
+            <button onClick={() => setShowQuantumSim(false)} className="text-slate-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            Simulate a nation-state eavesdropper intercepting your ciphertext today and executing <strong>Shor's Algorithm</strong> on a Cryptanalytically Relevant Quantum Computer (CRQC) in the future.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={runQuantumAttack}
+              disabled={quantumAttacking}
+              className="px-4 py-2 bg-fuchsia-500/20 hover:bg-fuchsia-500/30 text-fuchsia-300 border border-fuchsia-500/50 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all disabled:opacity-50"
+            >
+              {quantumAttacking ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              <span>Simulate Shor's Algorithm Attack</span>
+            </button>
+            <span className="text-xs font-mono text-slate-400">
+              Active mode: <strong className="text-cyan-400 capitalize">{mode}</strong>
+            </span>
+          </div>
+
+          {/* Attack Outcome */}
+          {attackResult && (
+            <div className={`p-3.5 rounded-xl border text-xs font-mono space-y-2 animate-fade-in ${
+              attackResult.status === "compromised"
+                ? "bg-red-500/10 border-red-500/40 text-red-300"
+                : "bg-emerald-500/10 border-emerald-500/40 text-emerald-300"
+            }`}>
+              <div className="flex items-center gap-2 font-bold uppercase tracking-wider text-sm">
+                {attackResult.status === "compromised" ? <XCircle className="w-4 h-4 text-red-400" /> : <CheckCircle className="w-4 h-4 text-emerald-400" />}
+                <span>{attackResult.status === "compromised" ? "⚠️ Classical Traffic Compromised!" : "🛡️ Hybrid Traffic Quantum-Resistant!"}</span>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-200">{attackResult.details}</p>
+              {attackResult.revealedText && (
+                <div className="bg-black/50 p-2.5 rounded-lg border border-red-500/30">
+                  <span className="text-red-400 uppercase font-bold text-[10px] block">Recovered Plaintext:</span>
+                  <span className="text-white text-sm font-semibold">{attackResult.revealedText}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
         {roomState.participantCount < 2 && handshakeState === "idle" && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4">
             <div className="p-4 rounded-full bg-cyan-500/10 border border-cyan-500/20">
@@ -269,12 +384,7 @@ export default function ChatPage({ onSessionChange }: Props) {
             </div>
           </div>
         )}
-        {handshakeState !== "idle" && handshakeState !== "complete" && (
-          <div className="flex items-center justify-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-            <Loader className="w-5 h-5 text-blue-400 animate-spin" />
-            <p className="text-blue-400 text-sm">{handshakeLabel[handshakeState]}</p>
-          </div>
-        )}
+
         {handshakeState === "complete" && messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3">
             <div className="p-4 rounded-full bg-emerald-500/10 border border-emerald-500/20">
@@ -283,57 +393,55 @@ export default function ChatPage({ onSessionChange }: Props) {
             <div>
               <p className="text-emerald-400 font-medium">Secure channel established</p>
               <p className="text-slate-400 text-sm mt-1">Session key: <span className="font-mono">{session?.sessionKeyFingerprint}</span></p>
-              <p className="text-slate-500 text-xs mt-1">Type a message to begin</p>
+              <p className="text-slate-500 text-xs mt-1">Type a message below to begin messaging</p>
             </div>
           </div>
         )}
+
         {messages.map(msg => (
           <div key={msg.id} className={`flex ${msg.senderRole === "self" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-xs lg:max-w-md group relative ${msg.senderRole === "self"
-                ? "bg-cyan-500/15 border border-cyan-500/30"
-                : "bg-navy-800 border border-white/10"
-              } rounded-xl px-4 py-3 cursor-pointer hover:border-cyan-400/40 transition-colors`}
-              onClick={() => setSelectedMsg(selectedMsg?.id === msg.id ? null : msg)}
+              className={`max-w-xs lg:max-w-md rounded-xl px-4 py-3 border transition-colors ${
+                msg.senderRole === "self"
+                  ? "bg-cyan-500/15 border-cyan-500/30 text-white"
+                  : "bg-navy-800 border-white/10 text-white"
+              }`}
             >
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start justify-between gap-3">
                 <p className={`text-sm break-words ${msg.authVerified ? "text-white" : "text-red-400"}`}>
-                  {msg.authVerified ? msg.plaintext : "? Authentication failed — message rejected"}
+                  {msg.authVerified ? msg.plaintext : "⚠️ Authentication failed — message rejected"}
                 </p>
-                <button className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
-                  <Info className="w-3.5 h-3.5 text-slate-400" />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 mt-2 pt-1 border-t border-white/5 text-[11px] font-mono text-slate-400">
+                <div className="flex items-center gap-1.5">
+                  <span>{new Date(msg.displayedAt).toLocaleTimeString()}</span>
+                  {msg.authVerified ? (
+                    <span className="text-emerald-400 flex items-center gap-0.5">
+                      <CheckCircle className="w-3 h-3" /> Auth OK
+                    </span>
+                  ) : (
+                    <span className="text-red-400 flex items-center gap-0.5">
+                      <XCircle className="w-3 h-3" /> Bad Tag
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => setWireModalMsg(msg)}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-cyan-300 hover:text-cyan-200 transition-colors"
+                >
+                  <Eye className="w-3 h-3" />
+                  <span>Inspect Wire</span>
                 </button>
               </div>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-xs text-slate-500">{new Date(msg.displayedAt).toLocaleTimeString()}</span>
-                {msg.authVerified
-                  ? <CheckCircle className="w-3 h-3 text-emerald-400" />
-                  : <XCircle className="w-3 h-3 text-red-400" />
-                }
-              </div>
-              {/* Message detail panel */}
-              {selectedMsg?.id === msg.id && (
-                <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 text-xs text-slate-400 font-mono">
-                  <p><span className="text-slate-500">ID:</span> {msg.id.slice(0, 16)}…</p>
-                  <p><span className="text-slate-500">Seq:</span> #{msg.meta.sequenceNumber}</p>
-                  <p><span className="text-slate-500">Alg:</span> {msg.meta.algorithm}</p>
-                  <p><span className="text-slate-500">Auth:</span> <span className={msg.authVerified ? "text-emerald-400" : "text-red-400"}>{msg.authVerified ? "Verified ?" : "FAILED ?"}</span></p>
-                  {msg.meta.encryptDurationMs !== undefined && (
-                    <p><span className="text-slate-500">Encrypt:</span> {msg.meta.encryptDurationMs.toFixed(3)}ms</p>
-                  )}
-                  {msg.meta.decryptDurationMs !== undefined && (
-                    <p><span className="text-slate-500">Decrypt:</span> {msg.meta.decryptDurationMs.toFixed(3)}ms</p>
-                  )}
-                  <p><span className="text-slate-500">Nonce:</span> {msg.encryptedPayload?.nonce?.slice(0, 16)}…</p>
-                </div>
-              )}
             </div>
           </div>
         ))}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
+      {/* Message Input Area */}
       {sendError && (
         <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -356,6 +464,76 @@ export default function ChatPage({ onSessionChange }: Props) {
           <Send className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Inspect Wire Modal */}
+      {wireModalMsg && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-navy-900 border border-white/20 rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4 animate-fade-in font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-cyan-400" />
+                <h3 className="font-bold text-white text-sm">Relayed Wire Frame Inspection</h3>
+              </div>
+              <button onClick={() => setWireModalMsg(null)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-slate-400 text-xs font-sans">
+              This is the exact JSON packet captured by the relay server. Notice that plaintext is completely absent — only opaque AES-256-GCM ciphertext and authentication metadata are exposed.
+            </p>
+
+            {/* Wire Packet Dump */}
+            <div className="bg-navy-950 p-3 rounded-xl border border-white/10 overflow-x-auto text-[11px] space-y-1 text-slate-300">
+              <p className="text-cyan-400 font-bold">// Raw WebSocket JSON Envelope</p>
+              <pre className="text-slate-300 font-mono whitespace-pre-wrap break-all">
+{JSON.stringify({
+  type: "encrypted_message",
+  sessionId: wireModalMsg.sessionId,
+  messageId: wireModalMsg.id,
+  senderId: wireModalMsg.senderId,
+  sequenceNumber: wireModalMsg.meta.sequenceNumber,
+  algorithm: wireModalMsg.meta.algorithm,
+  nonce_b64: wireModalMsg.encryptedPayload?.nonce,
+  ciphertext_b64: wireModalMsg.encryptedPayload?.ciphertext,
+  timestamp: wireModalMsg.meta.timestamp,
+  aad_bound: `session:${wireModalMsg.sessionId}|seq:${wireModalMsg.meta.sequenceNumber}`
+}, null, 2)}
+              </pre>
+            </div>
+
+            {/* Wire Security Notes */}
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 text-emerald-300 text-xs space-y-1 font-sans">
+              <p className="font-bold flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Zero-Knowledge Relay Guarantee
+              </p>
+              <p className="text-[11px] text-slate-300">
+                The server cannot decrypt this message because it does not possess the derived AES key or post-quantum shared secret. Associated Authenticated Data (AAD) prevents packet replay or room injection.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(wireModalMsg.encryptedPayload, null, 2));
+                  setCopiedWire(true);
+                  setTimeout(() => setCopiedWire(false), 2000);
+                }}
+                className="px-3 py-1.5 rounded-lg border border-white/10 text-slate-300 hover:text-white flex items-center gap-1 text-xs"
+              >
+                {copiedWire ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedWire ? "Copied Envelope" : "Copy JSON"}</span>
+              </button>
+              <button
+                onClick={() => setWireModalMsg(null)}
+                className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-semibold hover:bg-cyan-500/30"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+}
