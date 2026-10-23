@@ -25,9 +25,8 @@ export default function ChatPage({ onSessionChange }: Props) {
   const [copied, setCopied] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
-
   const { roomState, session, messages, handshakeState, connect, sendMessage, disconnect } = useSecureSession();
+  const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
 
   useEffect(() => {
     if (session && onSessionChange) {
