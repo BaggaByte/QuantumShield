@@ -2,17 +2,19 @@ import React, { useState, useRef, useEffect } from "react";
 import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
   CheckCircle, XCircle, AlertCircle, Key,
-  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check
+  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint
 } from "lucide-react";
 import { api } from "@/services/api";
 import { useSecureSession } from "@/hooks/useSecureSession";
 import type { CryptoMode, ChatMessage } from "@/types";
+import type { QSIdentity } from "@/services/IdentityService";
 
 interface Props {
   onSessionChange?: (s: { mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number } | null) => void;
+  identity?: QSIdentity | null;
 }
 
-export default function ChatPage({ onSessionChange }: Props) {
+export default function ChatPage({ onSessionChange, identity }: Props) {
   const [view, setView] = useState<"setup" | "chat">("setup");
   const [mode, setMode] = useState<CryptoMode>("hybrid");
   const [roomIdInput, setRoomIdInput] = useState("");

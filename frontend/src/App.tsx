@@ -8,6 +8,9 @@ import ExplorerPage from "@/pages/ExplorerPage";
 import BenchmarkPage from "@/pages/BenchmarkPage";
 import SecurityTestPage from "@/pages/SecurityTestPage";
 import TerminalDrawer from "@/components/TerminalDrawer";
+import IdentitySetup from "@/components/IdentitySetup";
+import IdentityCard from "@/components/IdentityCard";
+import { useIdentity } from "@/hooks/useIdentity";
 
 type Page = "overview" | "chat" | "explorer" | "benchmark" | "tests";
 
@@ -25,9 +28,14 @@ export default function App() {
   const [globalSession, setGlobalSession] = useState<{
     mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number;
   } | null>(null);
+  const { identity, status, create, setAlias, exportJSON, destroy } = useIdentity();
 
   return (
     <div className="min-h-screen bg-navy-950 text-white flex">
+      {/* Identity onboarding — shown only when no identity exists */}
+      {status === 'none' && (
+        <IdentitySetup onComplete={async (alias) => { await create(alias); }} />
+      )}
       {/* Sidebar */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-navy-900 border-r border-white/5 flex flex-col transform transition-transform duration-300 lg:translate-x-0 lg:relative lg:z-auto ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
         {/* Logo */}
@@ -71,10 +79,19 @@ export default function App() {
           </div>
         )}
 
+        {/* Identity Card */}
+        {identity && (
+          <IdentityCard
+            identity={identity}
+            onAliasChange={setAlias}
+            onExport={exportJSON}
+            onDelete={destroy}
+          />
+        )}
+
         {/* Version */}
-        <div className="p-4 border-t border-white/5">
-          <p className="text-xs text-slate-600">v1.0.0 — Educational Prototype</p>
-          <p className="text-xs text-slate-600 mt-0.5">Not production-ready</p>
+        <div className="px-4 pb-4">
+          <p className="text-[10px] text-slate-700">QuantumShield v2.0 · Phase 1</p>
         </div>
       </aside>
 
@@ -106,7 +123,7 @@ export default function App() {
         {/* Page Content */}
         <main className="flex-1 p-4 lg:p-8 overflow-y-auto">
           {page === "overview" && <OverviewPage onNavigate={(p) => setPage(p as Page)} globalSession={globalSession} />}
-          {page === "chat" && <ChatPage onSessionChange={setGlobalSession} />}
+          {page === "chat" && <ChatPage onSessionChange={setGlobalSession} identity={identity} />}
           {page === "explorer" && <ExplorerPage />}
           {page === "benchmark" && <BenchmarkPage />}
           {page === "tests" && <SecurityTestPage />}

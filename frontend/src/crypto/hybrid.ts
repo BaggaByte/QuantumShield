@@ -53,7 +53,8 @@ export function hexToBytes(hex: string): Uint8Array {
 }
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest('SHA-256', data);
+  const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  const digest = await crypto.subtle.digest('SHA-256', buf);
   return new Uint8Array(digest);
 }
 
@@ -84,7 +85,7 @@ export async function deriveSessionKey(
   const saltBytes = await sha256(new TextEncoder().encode(`QuantumShield-salt|${sessionId}`));
 
   const ikmKey = await crypto.subtle.importKey(
-    'raw', ikm.buffer.slice(ikm.byteOffset, ikm.byteOffset + ikm.byteLength),
+    'raw', ikm.buffer.slice(ikm.byteOffset, ikm.byteOffset + ikm.byteLength) as ArrayBuffer,
     'HKDF', false, ['deriveKey']
   );
 
@@ -92,8 +93,8 @@ export async function deriveSessionKey(
     {
       name: 'HKDF',
       hash: 'SHA-256',
-      salt: saltBytes.buffer.slice(saltBytes.byteOffset, saltBytes.byteOffset + saltBytes.byteLength),
-      info: infoBytes.buffer.slice(infoBytes.byteOffset, infoBytes.byteOffset + infoBytes.byteLength),
+      salt: saltBytes.buffer.slice(saltBytes.byteOffset, saltBytes.byteOffset + saltBytes.byteLength) as ArrayBuffer,
+      info: infoBytes.buffer.slice(infoBytes.byteOffset, infoBytes.byteOffset + infoBytes.byteLength) as ArrayBuffer,
     },
     ikmKey,
     { name: 'AES-GCM', length: 256 },
