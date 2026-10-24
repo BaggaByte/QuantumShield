@@ -6,6 +6,7 @@
 [![Vite + React](https://img.shields.io/badge/Vite-8.3%20%7C%20React%2019-61DAFB?logo=react&logoColor=black)](https://vitejs.dev)
 [![FIPS 203](https://img.shields.io/badge/NIST-FIPS%20203%20(ML--KEM--768)-blue)](https://csrc.nist.gov/pubs/fips/203/final)
 [![Tests](https://img.shields.io/badge/Tests-15%20Passing%20(100%25)-success)](https://pytest.org)
+[![License](https://img.shields.io/badge/License-Proprietary%20%E2%80%94%20All%20Rights%20Reserved-red)](./LICENSE)
 
 ---
 
@@ -204,3 +205,15 @@ tests/test_backend.py::test_server_does_not_store_keys PASSED            [100%]
 ## ⚠️ Disclaimer
 
 QuantumShield is an **educational prototype** created to demonstrate the mechanics and threat model of hybrid post-quantum cryptography. It is **not** intended for production or classified communications.
+
+---
+
+## 📄 License
+
+**Copyright (c) 2026 BaggaByte. All Rights Reserved.**
+
+This project is licensed under a **Proprietary License**. Viewing the source code is permitted for personal and educational reference only.
+
+> ❌ Copying, forking, distributing, modifying, or using this software in any commercial product is **strictly prohibited** without express written permission from the owner.
+
+See the [LICENSE](./LICENSE) file for full terms.
