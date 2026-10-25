@@ -70,10 +70,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+is_wildcard = "*" in settings.allowed_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
-    allow_credentials=True,
+    allow_credentials=not is_wildcard,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )

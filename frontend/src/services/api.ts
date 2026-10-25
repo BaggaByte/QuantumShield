@@ -3,8 +3,14 @@
  */
 
 const getBaseUrl = (): string => {
+  // Check for explicit environment variable configuration
+  const customUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL;
+  if (customUrl) {
+    return customUrl.endsWith('/') ? customUrl : `${customUrl}/`;
+  }
+
   if (typeof window !== 'undefined') {
-    // If running in Vite dev server (port 5173), point directly to FastAPI backend on 8001
+    // If running in Vite dev server (port 5173 / 5174), point directly to FastAPI backend on 8001
     if (window.location.port === '5173' || window.location.port === '5174') {
       return `http://${window.location.hostname}:8001/`;
     }
@@ -95,6 +101,20 @@ export const api = {
 };
 
 export function createWebSocket(roomId: string): WebSocket {
+  // Check for explicit WebSocket URL
+  const customWs = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_WS_URL;
+  if (customWs) {
+    const base = customWs.endsWith('/') ? customWs.slice(0, -1) : customWs;
+    return new WebSocket(`${base}/ws/room/${roomId}`);
+  }
+
+  // Derive WebSocket URL from VITE_BACKEND_URL if provided
+  const customBackend = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL;
+  if (customBackend) {
+    const wsBase = customBackend.replace(/^http/, 'ws').replace(/\/$/, '');
+    return new WebSocket(`${wsBase}/ws/room/${roomId}`);
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '5174')) {
     return new WebSocket(`ws://${window.location.hostname}:8001/ws/room/${roomId}`);
