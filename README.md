@@ -1,48 +1,98 @@
-# 🛡️ QuantumShield — Hybrid Post-Quantum Secure Messaging
+# 🛡️ QuantumShield — Post-Quantum Secure Messenger
 
-> **An interactive, full-stack educational platform demonstrating hybrid classical & post-quantum cryptography (X25519 + ML-KEM-768) defending against Harvest-Now-Decrypt-Later (HNDL) attacks.**
+> **The world's only messenger where not even a quantum computer in 2050 can decrypt your past messages — and you don't need a phone number or email to prove it.**
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.128-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Vite + React](https://img.shields.io/badge/Vite-8.3%20%7C%20React%2019-61DAFB?logo=react&logoColor=black)](https://vitejs.dev)
-[![FIPS 203](https://img.shields.io/badge/NIST-FIPS%20203%20(ML--KEM--768)-blue)](https://csrc.nist.gov/pubs/fips/203/final)
-[![Tests](https://img.shields.io/badge/Tests-15%20Passing%20(100%25)-success)](https://pytest.org)
+[![NIST FIPS 203](https://img.shields.io/badge/NIST-FIPS%20203%20(ML--KEM--768)-blue)](https://csrc.nist.gov/pubs/fips/203/final)
+[![Tests](https://img.shields.io/badge/Tests-17%20Passing%20(100%25)-success)](https://pytest.org)
+[![PWA](https://img.shields.io/badge/PWA-Installable%20%7C%20Web%20Push-purple)](https://web.dev/progressive-web-apps/)
 [![License](https://img.shields.io/badge/License-Proprietary%20%E2%80%94%20All%20Rights%20Reserved-red)](./LICENSE)
 
 ---
 
-## 🚀 Key Features
+## 🌟 The Core Breakthrough
 
-- **Hybrid Post-Quantum Key Exchange:** Combines classical **X25519 ECDH** (RFC 7748) with post-quantum lattice-based **ML-KEM-768** (NIST FIPS 203 / Kyber768).
-- **Dual-Secret HKDF Combiner:** Concatenates both shared secrets ($SS_{\text{classical}} \mathbin{\Vert} SS_{\text{pq}}$) into RFC 5869 HKDF-SHA-256 with room session IDs as salt.
-- **Symmetric Authenticated Encryption:** AES-256-GCM with fresh 96-bit random IVs and Associated Authenticated Data (AAD) binding.
-- **Interactive Secure Chat:** Two-tab peer-to-peer style live chat with real-time handshake stepper, wire inspection modal, and message integrity verification.
-- **Simulated Quantum Interceptor:** Live simulation demonstrating **Harvest Now, Decrypt Later (HNDL)** attacks — showing how classical sessions are compromised by Shor's algorithm while hybrid sessions remain secure.
-- **Crypto Explorer Lab:** Step-by-step key generation, encapsulation, decapsulation, and live hexadecimal inspector with mathematical explanations.
-- **Benchmark & Performance Lab:** In-browser microbenchmarks measuring computation time (keygen, encaps, decaps, HKDF, AES) and payload overhead (key sizes, wire bandwidth) with JSON/CSV export.
-- **Automated Security Test Suite:** 11 built-in security tests verifying key agreement, ciphertext tamper detection, tag truncation, replay protection, and zero key storage.
-- **Zero-Trust Relay Server:** Ephemeral in-memory FastAPI WebSocket rooms that never log, store, or inspect plaintexts or keys.
+Traditional encrypted messaging platforms (WhatsApp, Signal, Telegram) rely exclusively on classical Elliptic Curve Diffie-Hellman (Curve25519). Today, nation-state adversaries execute **Harvest Now, Decrypt Later (HNDL)** attacks—recording encrypted network traffic in bulk to decrypt in the future using **Shor's Algorithm** on a quantum computer.
+
+**QuantumShield mathematically neutralizes HNDL:**
+1. **Hybrid Post-Quantum Key Exchange:** Combines classical X25519 with **NIST FIPS 203 ML-KEM-768** (Module-Lattice Key Encapsulation). An attacker must break *both* discrete logarithms and high-dimensional lattice hardness simultaneously.
+2. **Identity Without Accounts:** No phone number, no email, no PII. Identity is an in-browser **Ed25519 signing keypair** (`QS·XXXX·XXXX`) portable via QR code.
+3. **Zero-Knowledge Ephemeral Relay:** The server never stores messages, keys, or user directories. All messages are encrypted with **AES-256-GCM** before leaving your browser.
+4. **Client-Side Hardware Vault at Rest:** Chat history is stored strictly on your device inside an IndexedDB vault encrypted with an AES-256-GCM key derived from your private identity key.
+5. **WhatsApp Web Ergonomics:** A pure, production-grade dual-pane layout featuring real-time delivery double checkmarks (`✓`/`✓✓` cyan), vector circuit doodle wallpaper, and encrypted file streaming.
 
 ---
 
-## 📐 Architecture & Key Exchange Flow
+## 📊 Architectural Comparison
+
+| Dimension | Traditional Apps (Telegram, Slack, Discord) | WhatsApp & Signal | **QuantumShield** |
+| :--- | :--- | :--- | :--- |
+| **Quantum Immunity (HNDL)** | ❌ Broken (RSA/ECC vulnerable) | ❌ Vulnerable to future quantum decryption | ✅ **Quantum-Safe** (Dual-HKDF X25519 + NIST ML-KEM-768) |
+| **Identity & Account Model** | ❌ Email / Username / Phone | ❌ **Mandatory Phone Number / SIM** | ✅ **Zero Accounts** (Ed25519 keypair, QR export) |
+| **Server Persistence** | ❌ Plaintext or cloud database | ⚠️ Server message queues + cloud backups | ✅ **Zero Server Persistence** (Ephemeral relay only) |
+| **Encrypted History at Rest** | ❌ Cloud archives | ⚠️ SQLite on device / unencrypted cloud backups | ✅ **Client AES-256-GCM Vault** in IndexedDB |
+| **Group Chat Architecture** | ❌ Server manages and inspects groups | ⚠️ Server routes fanout via sender keys | ✅ **Client-Side Star Topology** (In-browser Hub re-encryption) |
+| **Push Notification Privacy** | ❌ Plaintext / sender metadata leaks | ⚠️ Leaks sender and room metadata | ✅ **Zero-Knowledge VAPID Push** (Opaque wake-up signals) |
+| **Distribution & Censorship** | ❌ Centralized corporate silos | ❌ Bound to Apple / Google App Stores | ✅ **Standalone PWA** (Runs in any modern browser) |
+| **Software License** | Proprietary | Mixed / Proprietary | ✅ **Custom Proprietary License** |
+
+---
+
+## 🚀 Key Features & Capabilities
+
+### 1. Cryptographic Identity Without Accounts
+- **In-Browser Key Generation:** On first launch, the browser generates an **Ed25519 signing keypair** using the native Web Crypto API.
+- **Readable Fingerprint:** Your public key is represented by a compact, human-readable fingerprint badge (e.g. `QS·4A2F·B91C`).
+- **Seamless Portability:** Export and import your identity across mobile and desktop devices via **encrypted QR codes** or JSON envelopes.
+- **Custom Local Alias:** Optional display name stored locally alongside your identity keypair without syncing to any central directory.
+
+### 2. WhatsApp Web Dual-Pane Interface
+- **60-30-10 Color Psychology:** Deep obsidian canvas (`#080E14`), slate neutrals (`#111C24` / `#202C33`), and vibrant WhatsApp emerald (`#00A884`) / cyan (`#53BDEB`).
+- **Vector Circuit Doodle Wallpaper:** Abstract, high-tech SVG background pattern embedded directly in CSS without external image dependencies.
+- **Instant Search & Filter Chips:** Real-time conversation filtering (`All Chats`, `Active Rooms`, `Encrypted Vault`). Typing an 8-character code surfaces a 1-click **Join Room** prompt.
+- **Real-Time Delivery Acknowledgments:** Single grey tick `✓` when relayed to the server, and double cyan ticks `✓✓` when acknowledged by the recipient's browser.
+
+### 3. Star Topology Group Messaging (Up to 8 Participants)
+- **Ephemeral Hub Election:** The first participant to enter a room is elected the group's in-browser **Hub**.
+- **Bilateral Post-Quantum Handshakes:** The Hub negotiates separate hybrid post-quantum sessions with every connected spoke.
+- **In-Browser Re-Encryption:** When a spoke transmits a message or file chunk, the Hub decrypts it locally and re-encrypts it for each recipient spoke. The central server sees only opaque ciphertexts.
+- **Automatic Failover:** If the Hub disconnects, the remaining participants automatically elect a successor Hub.
+
+### 4. Encrypted File & Image Streaming
+- **32KB Chunk Streaming:** Files are sliced, encrypted with AES-256-GCM bound to sequence numbers, and streamed via WebSockets.
+- **SHA-256 Digest Verification:** The entire file hash is verified client-side before assembling the file into an in-memory Blob URL.
+- **Drag-and-Drop & Inline Preview:** Drop files directly onto the chat canvas; view image previews with click-to-zoom modals and download documents directly.
+
+### 5. Progressive Web App (PWA) & Zero-Knowledge Push Notifications
+- **Installable Desktop & Mobile App:** Fully compliant with PWA criteria (`manifest.json`, standalone display, 192px/512px maskable icons).
+- **Service Worker Caching:** Offline app shell precaching with network-first fallback (`sw.js`).
+- **RFC 8292 VAPID Push Protocol:** Automated NIST P-256 VAPID keypair lifecycle on the FastAPI backend.
+- **Zero-Knowledge Signal Guarantee:** Third-party push services (Apple APNs / Google FCM) receive only an opaque wake-up ping (`{"title": "QuantumShield", "body": "New encrypted signal received"}`). Push services have zero access to sender identities, room codes, or message contents.
+
+---
+
+## 📐 Hybrid Cryptographic Pipeline
 
 ```
-Alice (Initiator)                               Bob (Responder)
-  │                                               │
-  ├─ Generate X25519 (sk_A, pk_A)                 │
-  ├─ Handshake Init (pk_A) ──────────────────────>│
-  │                                               ├─ Generate X25519 (sk_B, pk_B)
-  │                                               ├─ Generate ML-KEM-768 (sk_kem, pk_kem)
-  │                                               ├─ Compute X25519 SS: X25519(sk_B, pk_A)
-  │                                               ├─ Encapsulate ML-KEM: Encaps(pk_kem)
-  │                                               ├─ HKDF(SS_classical || SS_pq) -> Key
-  │<──────────────────── Handshake Resp (pk_B, ct)┤
-  ├─ Compute X25519 SS: X25519(sk_A, pk_B)        │
-  ├─ Decapsulate ML-KEM: Decaps(ct, sk_kem)       │
-  ├─ HKDF(SS_classical || SS_pq) -> Key          │
-  │                                               │
-  │════════════════ SECURE SESSION ESTABLISHED ═══│
-  ├─ AES-256-GCM Encrypted Message ─────────────>├─ Decrypt & Verify Tag
+Alice (Initiator)                                            Bob (Responder)
+  │                                                            │
+  ├─ 1. Generate X25519 (sk_A, pk_A)                           │
+  ├─ 2. Handshake Offer (pk_A) ───────────────────────────────>│
+  │                                                            ├─ 3. Generate X25519 (sk_B, pk_B)
+  │                                                            ├─ 4. Generate ML-KEM-768 (sk_kem, pk_kem)
+  │                                                            ├─ 5. Compute X25519 SS: X25519(sk_B, pk_A)
+  │                                                            ├─ 6. Encapsulate ML-KEM: Encaps(pk_kem)
+  │                                                            ├─ 7. HKDF-SHA-256(SS_classical || SS_pq) -> Key_B
+  │<─────────────────── Handshake Answer (pk_B, ct)────────────┤
+  ├─ 8. Compute X25519 SS: X25519(sk_A, pk_B)                  │
+  ├─ 9. Decapsulate ML-KEM: Decaps(ct, sk_kem)                 │
+  ├─ 10. HKDF-SHA-256(SS_classical || SS_pq) -> Key_A          │
+  │                                                            │
+  │══════════════════ POST-QUANTUM SECURE SESSION ESTABLISHED ═│
+  │                                                            │
+  ├─ 11. AES-256-GCM Encrypted Message / File Chunk ──────────>├─ 12. Decrypt & Verify AAD
+  │<─────────────────── Delivery ACK (Double Cyan Ticks ✓✓)─────┤
 ```
 
 ---
@@ -53,43 +103,54 @@ Alice (Initiator)                               Bob (Responder)
 crypto/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py          # FastAPI application, CORS, routers
-│   │   ├── config.py        # Configuration settings
-│   │   ├── relay.py         # Room manager & WebSocket message forwarding
-│   │   └── schemas.py       # Pydantic models for envelopes and handshake
+│   │   ├── api/
+│   │   │   └── routes.py         # REST endpoints (rooms, health, VAPID push)
+│   │   ├── rooms/
+│   │   │   └── manager.py        # Ephemeral room manager & Hub election
+│   │   ├── websocket/
+│   │   │   └── handler.py        # WebSocket routing (messages, files, acks)
+│   │   ├── config.py             # Server settings & origins
+│   │   ├── push.py               # RFC 8292 VAPID push notification manager
+│   │   └── main.py               # FastAPI lifespan & WebSocket mounting
 │   ├── tests/
-│   │   └── test_backend.py  # 15 comprehensive unit & integration tests
-│   └── requirements.txt     # Python dependencies
+│   │   └── test_backend.py       # 17 comprehensive automated unit tests
+│   └── requirements.txt          # Python dependencies (FastAPI, cryptography, pywebpush)
 ├── frontend/
+│   ├── public/
+│   │   ├── manifest.json         # PWA Web App Manifest
+│   │   ├── sw.js                 # Service worker (offline cache & push)
+│   │   ├── icon-192.png          # High-resolution 192px PWA maskable icon
+│   │   ├── icon-512.png          # High-resolution 512px PWA maskable icon
+│   │   └── favicon.svg           # QuantumShield vector favicon
 │   ├── src/
 │   │   ├── crypto/
-│   │   │   └── hybrid.ts    # X25519, ML-KEM-768, HKDF, AES-256-GCM implementation
+│   │   │   └── hybrid.ts         # X25519, ML-KEM-768, HKDF, AES-256-GCM
 │   │   ├── hooks/
-│   │   │   └── useSecureSession.ts # State machine for connection & crypto
-│   │   ├── pages/
-│   │   │   ├── OverviewPage.tsx    # High-level architecture & posture
-│   │   │   ├── ChatPage.tsx        # Live secure chat & quantum attack simulation
-│   │   │   ├── ExplorerPage.tsx    # Step-by-step crypto breakdown & hex inspect
-│   │   │   ├── BenchmarkPage.tsx   # Latency & size benchmarking suite
-│   │   │   └── SecurityTestPage.tsx# 11 automated in-browser security tests
+│   │   │   ├── useIdentity.ts    # Identity hook (alias, export, reset)
+│   │   │   └── useSecureSession.ts # E2E post-quantum state machine & re-encryption
 │   │   ├── services/
-│   │   │   └── api.ts       # REST client for backend relay
+│   │   │   ├── api.ts            # REST client & WebSocket factory
+│   │   │   ├── IdentityService.ts# Ed25519 keypair & QR export
+│   │   │   ├── StorageService.ts # Client AES-256-GCM IndexedDB vault
+│   │   │   ├── FileTransferService.ts # 32KB chunk streaming & SHA-256 digest
+│   │   │   └── PushNotificationService.ts # Service worker & Web Push manager
+│   │   ├── components/
+│   │   │   ├── IdentityCard.tsx  # Profile card & QR export modal
+│   │   │   └── IdentitySetup.tsx # First-time onboarding wizard
+│   │   ├── pages/
+│   │   │   └── ChatPage.tsx      # WhatsApp Web dual-pane workspace
 │   │   ├── types/
-│   │   │   └── index.ts     # TypeScript interface definitions
-│   │   ├── App.tsx          # Main shell with sidebar navigation
-│   │   └── index.css        # Tailwind directives & glassmorphic styling
+│   │   │   └── index.ts          # Strict TypeScript interface definitions
+│   │   ├── App.tsx               # Production application entry point
+│   │   └── index.css             # WhatsApp color system & vector doodle pattern
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── tsconfig.json
 ├── docs/
-│   ├── ARCHITECTURE.md      # Detailed system architecture and state machine
-│   ├── CRYPTOGRAPHY.md      # Mathematical foundations & NIST FIPS 203 details
-│   └── SECURITY_ANALYSIS.md # Threat model, HNDL analysis, forward secrecy
-├── scripts/
-│   ├── run_dev.ps1          # Single-command launcher (PowerShell)
-│   ├── run_dev.sh           # Single-command launcher (Bash)
-│   ├── run_tests.ps1        # Test suite executor (PowerShell)
-│   └── run_tests.sh         # Test suite executor (Bash)
+│   ├── ARCHITECTURE.md           # System design & Star Topology state machine
+│   ├── CRYPTOGRAPHY.md           # Mathematical proofs & NIST FIPS 203 details
+│   └── SECURITY_ANALYSIS.md      # Threat model, HNDL analysis, forward secrecy
+├── LICENSE                       # Proprietary All Rights Reserved license
 └── README.md
 ```
 
@@ -100,20 +161,23 @@ crypto/
 ### Prerequisites
 - **Python 3.10+**
 - **Node.js 18+ & npm**
+- *(Optional)* **Docker & Docker Compose**
 
-### 🐳 Option 1: Run with Docker (Zero-Setup on Any Laptop)
+---
 
-No need to install Python, Node, or manage dependencies. Runs anywhere with Docker installed:
+### 🐳 Option 1: Docker Compose (Zero-Configuration)
+
+Runs both the backend relay and the frontend client simultaneously in lightweight containers:
 
 ```bash
 docker compose up --build
 ```
 
-- **Frontend Web UI:** [http://localhost:5173](http://localhost:5173)
-- **Backend API & Swagger:** [http://localhost:8001/docs](http://localhost:8001/docs)
+- **Frontend Web App (PWA):** [http://localhost:5173](http://localhost:5173)
+- **Backend API Docs (Swagger):** [http://localhost:8001/docs](http://localhost:8001/docs)
 - **Healthcheck Endpoint:** [http://localhost:8001/health](http://localhost:8001/health)
 
-To stop:
+To shut down:
 ```bash
 docker compose down
 ```
@@ -122,98 +186,53 @@ docker compose down
 
 ### 💻 Option 2: Local Installation (Manual)
 
-#### 1. Launch Everything in One Command
-
-**Windows (PowerShell):**
-```powershell
-.\scripts\run_dev.ps1
-```
-
-**Linux / macOS (Bash):**
-```bash
-chmod +x scripts/*.sh
-./scripts/run_dev.sh
-```
-
----
-
-#### 2. Manual Startup (Step-by-step)
-
-**Backend:**
+#### 1. Start the Backend Relay:
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8001
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 ```
-- API is available at `http://localhost:8001`
-- Swagger Interactive Docs at `http://localhost:8001/docs`
 
-**Frontend:**
+#### 2. Start the Frontend PWA:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-- Web Application is available at `http://localhost:5173`
+
+Visit **[http://localhost:5173](http://localhost:5173)** in your browser.
 
 ---
 
-## 🧪 Running Tests
+## 🧪 Automated Testing
 
-### Execute All Automated Tests
-**Windows:**
-```powershell
-.\scripts\run_tests.ps1
-```
-
-**Linux / macOS:**
+### Backend Test Suite (Pytest)
 ```bash
-./scripts/run_tests.sh
+cd backend
+python -m pytest tests/test_backend.py -v
+```
+```
+======================== 17 passed in 2.61s ========================
 ```
 
-### Backend Test Results
+### Frontend Type Safety & Production Build
+```bash
+cd frontend
+npx tsc --noEmit
+npm run build
 ```
-tests/test_backend.py::test_health_endpoint PASSED                       [  6%]
-tests/test_backend.py::test_create_room PASSED                           [ 13%]
-tests/test_backend.py::test_get_nonexistent_room PASSED                  [ 20%]
-tests/test_backend.py::test_get_created_room PASSED                      [ 26%]
-tests/test_backend.py::test_room_manager_create PASSED                   [ 33%]
-tests/test_backend.py::test_room_manager_max_rooms PASSED                [ 40%]
-tests/test_backend.py::test_room_not_full_initially PASSED               [ 46%]
-tests/test_backend.py::test_room_isolation PASSED                        [ 53%]
-tests/test_backend.py::test_room_full_after_two_join PASSED              [ 60%]
-tests/test_backend.py::test_join_full_room_raises PASSED                 [ 66%]
-tests/test_backend.py::test_leave_room_cleanup PASSED                    [ 73%]
-tests/test_backend.py::test_participant_roles PASSED                     [ 80%]
-tests/test_backend.py::test_security_status PASSED                       [ 86%]
-tests/test_backend.py::test_benchmark_config PASSED                      [ 93%]
-tests/test_backend.py::test_server_does_not_store_keys PASSED            [100%]
-======================== 15 passed in 1.98s ========================
+```
+✓ built in 4.80s (dist/assets/index.js 357 kB)
 ```
 
 ---
 
-## 🔬 In-Browser Educational Modules
-
-1. **Secure Chat:** Open two browser windows (or tabs) connecting to the same Room ID. Watch the handshake execute in real time, view raw JSON frames, and simulate a quantum adversary attempting to decrypt classical vs hybrid messages.
-2. **Crypto Explorer:** Inspect every step of the cryptographic pipeline with live hex inspection of public keys, secret keys, encapsulated ciphertexts, and HKDF output.
-3. **Benchmark Lab:** Run live benchmarks in your browser comparing keygen time, encapsulation time, and payload sizes between Classical and Hybrid modes.
-4. **Security Test Suite:** Run 11 client-side unit tests directly in your browser with pass/fail indicators and latency measurements.
-
----
-
-## ⚠️ Disclaimer
-
-QuantumShield is an **educational prototype** created to demonstrate the mechanics and threat model of hybrid post-quantum cryptography. It is **not** intended for production or classified communications.
-
----
-
-## 📄 License
+## 📄 License & Intellectual Property
 
 **Copyright (c) 2026 BaggaByte. All Rights Reserved.**
 
-This project is licensed under a **Proprietary License**. Viewing the source code is permitted for personal and educational reference only.
+This software is protected under a **Proprietary All Rights Reserved License**.
+- Viewing the source code is permitted for reference and audit purposes.
+- Copying, cloning, distributing, sublicensing, or commercially exploiting any part of this software without prior written authorization from the copyright holder is **strictly prohibited**.
 
-> ❌ Copying, forking, distributing, modifying, or using this software in any commercial product is **strictly prohibited** without express written permission from the owner.
-
-See the [LICENSE](./LICENSE) file for full terms.
+See the full terms in the [LICENSE](./LICENSE) file.
