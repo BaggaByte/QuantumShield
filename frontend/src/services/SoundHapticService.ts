@@ -11,8 +11,8 @@
  * - Graceful fallbacks when audio or vibration APIs are restricted
  */
 
-export type SoundType = 'send' | 'receive' | 'delivered' | 'handshake' | 'tap' | 'error';
-export type HapticType = 'tap' | 'send' | 'receive' | 'success' | 'error';
+export type SoundType = 'send' | 'receive' | 'delivered' | 'handshake' | 'tap' | 'error' | 'burn';
+export type HapticType = 'tap' | 'send' | 'receive' | 'success' | 'error' | 'burn';
 
 class SoundHapticService {
   private ctx: AudioContext | null = null;
@@ -85,6 +85,9 @@ class SoundHapticService {
           break;
         case 'error':
           navigator.vibrate([25, 40, 30]);
+          break;
+        case 'burn':
+          navigator.vibrate([10, 25, 10]);
           break;
       }
     } catch {
@@ -238,6 +241,27 @@ class SoundHapticService {
 
           osc.start(now);
           osc.stop(now + 0.15);
+          break;
+        }
+
+        // Ephemeral Message Evaporation (Soft descending whisper whoosh)
+        case 'burn': {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(650, now);
+          osc.frequency.exponentialRampToValueAtTime(110, now + 0.2);
+
+          gain.gain.setValueAtTime(0.001, now);
+          gain.gain.linearRampToValueAtTime(0.08, now + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+          osc.connect(gain);
+          gain.connect(masterGain);
+
+          osc.start(now);
+          osc.stop(now + 0.24);
           break;
         }
       }

@@ -88,7 +88,7 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                         })
 
             # Relay handshake, encrypted messages, file transfers, and delivery acknowledgments
-            elif msg_type in ("handshake_offer", "handshake_answer", "handshake_complete",
+            elif msg_type in ("handshake_offer", "handshake_answer", "handshake_complete", "handshake_request",
                               "encrypted_message", "message_ack", "file_manifest", "file_chunk", "ping"):
                 current_room = room_manager.get_room(room_id)
                 if current_room:

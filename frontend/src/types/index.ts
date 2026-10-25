@@ -49,6 +49,7 @@ export interface MessageMeta {
   encryptDurationMs?: number;
   decryptDurationMs?: number;
   authVerified?: boolean;
+  burnDuration?: number;
 }
 
 export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered';
@@ -87,6 +88,8 @@ export interface ChatMessage {
   senderAlias?: string;
   senderFingerprint?: string;
   attachment?: FileAttachment;
+  burnDuration?: number;
+  expiresAt?: number;
 }
 
 export interface EncryptedStoredRecord {

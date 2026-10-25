@@ -5,7 +5,7 @@ import {
   Loader, LogOut, RefreshCw, Eye, X, Check, Fingerprint,
   Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud,
   Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight, Globe,
-  Volume2, VolumeX
+  Volume2, VolumeX, Flame, RotateCw, ShieldCheck, Sparkles
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
@@ -14,8 +14,52 @@ import { soundHapticService } from "@/services/SoundHapticService";
 import { useSecureSession } from "@/hooks/useSecureSession";
 import IdentityCard from "@/components/IdentityCard";
 import AudioSettingsModal from "@/components/AudioSettingsModal";
+import PQSecurityModal from "@/components/PQSecurityModal";
 import type { CryptoMode, ChatMessage, StoredRoomSummary } from "@/types";
 import type { QSIdentity } from "@/services/IdentityService";
+
+function BurnCountdown({ msg, onDelete }: { msg: ChatMessage; onDelete: (id: string) => void }) {
+  const [timeLeft, setTimeLeft] = useState<number>(() => {
+    if (!msg.expiresAt) return msg.burnDuration || 10;
+    return Math.max(0, Math.ceil((msg.expiresAt - Date.now()) / 1000));
+  });
+
+  useEffect(() => {
+    if (!msg.expiresAt) return;
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((msg.expiresAt! - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      if (remaining <= 0) {
+        clearInterval(interval);
+        soundHapticService.play("burn");
+        soundHapticService.triggerHaptic("burn");
+        onDelete(msg.id);
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  }, [msg.expiresAt, msg.id, onDelete]);
+
+  const total = msg.burnDuration || 10;
+  const pct = Math.max(0, Math.min(100, (timeLeft / total) * 100));
+
+  return (
+    <div className="mb-2 p-1.5 rounded-lg bg-black/40 border border-amber-500/20 flex flex-col gap-1 select-none">
+      <div className="flex items-center justify-between text-[10px] font-mono font-bold text-amber-300">
+        <span className="flex items-center gap-1">
+          <Flame className="w-3 h-3 text-amber-400 animate-pulse" />
+          <span>Self-destructs in {timeLeft}s</span>
+        </span>
+        <span className="text-amber-400/80">{timeLeft}s</span>
+      </div>
+      <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden">
+        <div
+          className="bg-gradient-to-r from-amber-400 to-rose-500 h-full transition-all duration-200 ease-linear"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   identity?: QSIdentity | null;
@@ -57,6 +101,9 @@ export default function ChatPage({
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [showRosterModal, setShowRosterModal] = useState(false);
   const [audioModalOpen, setAudioModalOpen] = useState(false);
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+  const [burnTimer, setBurnTimer] = useState<number | null>(null);
+  const [isRoomVerified, setIsRoomVerified] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(soundHapticService.isSoundEnabled());
 
   useEffect(() => {
@@ -64,6 +111,14 @@ export default function ChatPage({
       setSoundEnabled(soundHapticService.isSoundEnabled());
     });
   }, []);
+
+  // Check verification state for active room
+  useEffect(() => {
+    if (typeof window !== "undefined" && activeRoomId) {
+      const verified = localStorage.getItem(`qs_verified_${activeRoomId}`) === "true";
+      setIsRoomVerified(verified);
+    }
+  }, [activeRoomId, isSecurityModalOpen]);
 
   // UX & Feedback
   const [copiedCode, setCopiedCode] = useState(false);
@@ -78,7 +133,7 @@ export default function ChatPage({
 
   const {
     roomState, session, messages, handshakeState, transferProgress, connect,
-    initiateHandshake, sendMessage, sendFile, disconnect, clearHistory
+    initiateHandshake, retryHandshake, sendMessage, sendFile, deleteMessageFromChat, disconnect, clearHistory
   } = useSecureSession(identity);
 
   // --- Load Recent Rooms from IndexedDB --------------------------------------
@@ -178,7 +233,7 @@ export default function ChatPage({
     if (!inputText.trim()) return;
     setSendError("");
     try {
-      await sendMessage(inputText.trim());
+      await sendMessage(inputText.trim(), burnTimer ?? undefined);
       setInputText("");
       await loadRecentRooms();
     } catch (e) {
@@ -606,10 +661,14 @@ export default function ChatPage({
                   <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
 
-                {/* Room Avatar */}
-                <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(activeRoomId)} flex items-center justify-center text-white shrink-0 shadow`}>
-                  <Shield className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                </div>
+                {/* Room Avatar & Quick Security Verification */}
+                <button
+                  onClick={() => setIsSecurityModalOpen(true)}
+                  title="Click to view Post-Quantum Security Certificate"
+                  className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(activeRoomId)} flex items-center justify-center text-white shrink-0 shadow hover:ring-2 hover:ring-wa-teal transition-all`}
+                >
+                  {isRoomVerified ? <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-300" /> : <Shield className="w-4 h-4 sm:w-5 sm:h-5 text-white" />}
+                </button>
 
                 <div className="min-w-0 flex-1 overflow-hidden">
                   <div className="flex items-center gap-1.5 sm:gap-2">
@@ -635,15 +694,54 @@ export default function ChatPage({
                       {roomState.isHub ? "⭐️ Star Hub" : "Spoke"}
                     </span>
                     <span className="text-white/30 shrink-0">•</span>
-                    <span className={`truncate ${handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}`}>
-                      {handshakeState === "complete" ? "PQ Active ✓" : "Negotiating…"}
-                    </span>
+                    <div className="truncate flex items-center gap-1">
+                      {roomState.participantCount < 2 ? (
+                        <span className="text-wa-muted">Waiting for peer…</span>
+                      ) : handshakeState === "complete" ? (
+                        <button
+                          onClick={() => setIsSecurityModalOpen(true)}
+                          className="text-emerald-400 font-semibold hover:underline flex items-center gap-1"
+                          title="Click to view Post-Quantum Security Certificate"
+                        >
+                          <span>PQ Active ✓</span>
+                          {isRoomVerified && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded border border-emerald-500/30">Verified</span>}
+                        </button>
+                      ) : handshakeState === "generating_keys" ? (
+                        <span className="text-amber-400 animate-pulse">Generating ML-KEM keys…</span>
+                      ) : handshakeState === "exchanging" ? (
+                        <span className="text-amber-400 animate-pulse">Exchanging PQ public keys…</span>
+                      ) : handshakeState === "deriving" ? (
+                        <span className="text-amber-400 animate-pulse">Deriving AES-256 session key…</span>
+                      ) : handshakeState === "failed" ? (
+                        <button
+                          onClick={retryHandshake}
+                          className="text-rose-400 hover:text-rose-300 font-semibold underline flex items-center gap-1 cursor-pointer"
+                          title="Click to retry handshake"
+                        >
+                          <span>Failed • Tap to Retry</span>
+                          <RotateCw className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="text-amber-400">Negotiating…</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* Right Action Icons */}
               <div className="flex items-center gap-0.5 sm:gap-1 text-wa-muted shrink-0">
+                {/* Verify Quantum Security & SAS Fingerprint */}
+                <button
+                  onClick={() => setIsSecurityModalOpen(true)}
+                  title="Verify Post-Quantum Security (SAS Safety Number)"
+                  className={`p-1.5 sm:p-2 rounded-full transition-colors ${
+                    isRoomVerified ? "text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "hover:bg-wa-hover hover:text-white"
+                  }`}
+                >
+                  <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5" />
+                </button>
+
                 {/* Zero-Knowledge Push Notification Toggle */}
                 <button
                   onClick={handleTogglePush}
@@ -846,6 +944,11 @@ export default function ChatPage({
                         </div>
                       )}
 
+                      {/* Message Self-Destruct Fuse */}
+                      {msg.burnDuration && (
+                        <BurnCountdown msg={msg} onDelete={deleteMessageFromChat} />
+                      )}
+
                       {/* Message Text Content */}
                       <p className="text-sm leading-relaxed break-words whitespace-pre-wrap select-text">
                         {msg.authVerified ? msg.plaintext : "⚠️ Authentication failed — message rejected"}
@@ -919,18 +1022,48 @@ export default function ChatPage({
             />
 
             {/* Bottom WhatsApp-Style Input Bar */}
-            <div className="p-3 bg-wa-card border-t border-wa-subtle flex items-center gap-2.5 shrink-0 z-10">
+            <div className="p-2.5 sm:p-3 bg-wa-card border-t border-wa-subtle flex items-center gap-2 sm:gap-2.5 shrink-0 z-10">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={handshakeState !== "complete"}
                 title="Attach Document or Image"
-                className="p-2.5 rounded-full hover:bg-wa-hover text-wa-muted hover:text-white transition-colors disabled:opacity-40"
+                className="p-2 sm:p-2.5 rounded-full hover:bg-wa-hover text-wa-muted hover:text-white transition-colors disabled:opacity-40"
               >
                 <Paperclip className="w-5 h-5" />
               </button>
 
-              <div className="flex-1 relative flex items-center bg-wa-incoming border border-wa-subtle rounded-full px-4 py-2 focus-within:border-wa-teal transition-colors">
+              {/* Disappearing / Self-Destruct Message Toggle */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const options = [null, 10, 30, 60];
+                    const currIdx = options.indexOf(burnTimer);
+                    const next = options[(currIdx + 1) % options.length];
+                    setBurnTimer(next);
+                    soundHapticService.play("tap");
+                    soundHapticService.triggerHaptic("tap");
+                  }}
+                  title={burnTimer ? `Disappearing Messages Active (${burnTimer}s)` : "Enable Disappearing Messages"}
+                  className={`p-2 sm:p-2.5 rounded-full transition-all relative ${
+                    burnTimer
+                      ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-sm"
+                      : "hover:bg-wa-hover text-wa-muted hover:text-white"
+                  }`}
+                >
+                  <Flame className="w-5 h-5" />
+                  {burnTimer && (
+                    <span className="absolute -top-1 -right-1 bg-amber-500 text-black text-[9px] font-black px-1 rounded-full shadow leading-tight">
+                      {burnTimer}s
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              <div className={`flex-1 relative flex items-center bg-wa-incoming border rounded-full px-4 py-2 transition-colors ${
+                burnTimer ? "border-amber-500/40 focus-within:border-amber-400" : "border-wa-subtle focus-within:border-wa-teal"
+              }`}>
                 <input
                   type="text"
                   value={inputText}
@@ -939,7 +1072,9 @@ export default function ChatPage({
                   disabled={handshakeState !== "complete"}
                   placeholder={
                     handshakeState === "complete"
-                      ? "Type an encrypted message…"
+                      ? burnTimer
+                        ? `🔥 Disappearing in ${burnTimer}s • Type a message…`
+                        : "Type an encrypted message…"
                       : "Establishing post-quantum channel…"
                   }
                   className="w-full bg-transparent text-sm text-wa-body placeholder-wa-muted focus:outline-none disabled:opacity-40"
@@ -949,7 +1084,12 @@ export default function ChatPage({
               <button
                 onClick={handleSend}
                 disabled={!inputText.trim() || handshakeState !== "complete"}
-                className="p-2.5 rounded-full bg-wa-teal hover:bg-[#00c298] text-white shadow-lg shadow-teal-950/40 transition-transform active:scale-95 disabled:opacity-40 disabled:hover:bg-wa-teal"
+                className={`p-2.5 rounded-full text-white shadow-lg transition-transform active:scale-95 disabled:opacity-40 ${
+                  burnTimer
+                    ? "bg-gradient-to-r from-amber-500 to-rose-500 shadow-amber-950/40 hover:brightness-110"
+                    : "bg-wa-teal hover:bg-[#00c298] shadow-teal-950/40"
+                }`}
+                title={burnTimer ? `Send Disappearing Message (${burnTimer}s)` : "Send Encrypted Message"}
               >
                 <Send className="w-5 h-5" />
               </button>
@@ -1200,6 +1340,16 @@ export default function ChatPage({
       <AudioSettingsModal
         isOpen={audioModalOpen}
         onClose={() => setAudioModalOpen(false)}
+      />
+
+      {/* Post-Quantum Security & SAS Key Verification Modal */}
+      <PQSecurityModal
+        isOpen={isSecurityModalOpen}
+        onClose={() => setIsSecurityModalOpen(false)}
+        roomId={activeRoomId}
+        sessionKeyFingerprint={session?.sessionKeyFingerprint}
+        cryptoMode={session?.mode || mode}
+        isHub={roomState.isHub}
       />
     </div>
   );

@@ -292,6 +292,19 @@ export const StorageService = {
   },
 
   /**
+   * Deletes a specific message record (used for burn-after-reading / self-destruct).
+   */
+  async deleteMessage(messageId: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_MESSAGES, 'readwrite');
+      tx.objectStore(STORE_MESSAGES).delete(messageId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  /**
    * Returns a list of recently active rooms with message counts.
    */
   async getRecentRooms(): Promise<StoredRoomSummary[]> {

@@ -45,6 +45,7 @@ function buildAAD(meta: Omit<MessageMeta, 'encryptDurationMs' | 'decryptDuration
     sequenceNumber: meta.sequenceNumber,
     algorithm: meta.algorithm,
     timestamp: meta.timestamp,
+    burnDuration: meta.burnDuration,
   });
   return new TextEncoder().encode(str);
 }
@@ -101,6 +102,9 @@ export function useSecureSession(identity?: QSIdentity | null) {
   const handshakeStartRef = useRef<number>(0);
   const keyGenStartRef = useRef<number>(0);
 
+  const inFlightHandshakesRef = useRef<Set<string>>(new Set());
+  const handshakeTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
   // --- Cleanup -------------------------------------------------------------
 
   const cleanup = useCallback(() => {
@@ -108,6 +112,9 @@ export function useSecureSession(identity?: QSIdentity | null) {
       ws.current.close();
       ws.current = null;
     }
+    handshakeTimeoutsRef.current.forEach(t => clearTimeout(t));
+    handshakeTimeoutsRef.current.clear();
+    inFlightHandshakesRef.current.clear();
     sessionKeyBytes.current = null;
     myX25519.current = null;
     myMLKEM.current = null;
@@ -137,8 +144,32 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
   // --- Handshake Offer to a Specific Peer (Hub -> Spoke) -------------------
 
-  const initiateHandshakeToPeer = useCallback(async (targetPeerId: string) => {
-    if (!ws.current) return;
+  const initiateHandshakeToPeer = useCallback(async (targetPeerId: string, forceRetry = false) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    if (!targetPeerId) return;
+
+    // Deduplicate concurrent handshakes to the same peer unless explicitly forced
+    if (!forceRetry && inFlightHandshakesRef.current.has(targetPeerId)) {
+      return;
+    }
+    inFlightHandshakesRef.current.add(targetPeerId);
+
+    // Clear prior timeout if any
+    if (handshakeTimeoutsRef.current.has(targetPeerId)) {
+      clearTimeout(handshakeTimeoutsRef.current.get(targetPeerId)!);
+      handshakeTimeoutsRef.current.delete(targetPeerId);
+    }
+
+    // Safety watchdog: if not completed within 3500ms, mark failed and allow retry
+    const timeout = setTimeout(() => {
+      if (!peerSessionsRef.current.has(targetPeerId)) {
+        console.warn(`[QS] Handshake with ${targetPeerId} timed out after 3500ms`);
+        inFlightHandshakesRef.current.delete(targetPeerId);
+        setHandshakeState(prev => prev === 'complete' ? 'complete' : 'failed');
+      }
+    }, 3500);
+    handshakeTimeoutsRef.current.set(targetPeerId, timeout);
+
     try {
       keyGenStartRef.current = performance.now();
       handshakeStartRef.current = performance.now();
@@ -173,6 +204,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
       }));
     } catch (err) {
       console.error('[QS] Peer handshake initiation failed:', err);
+      inFlightHandshakesRef.current.delete(targetPeerId);
       setHandshakeState('failed');
     }
   }, []);
@@ -241,6 +273,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
     try {
       setHandshakeState('exchanging');
       const senderId = (msg.from as string) || (msg.to as string) || 'hub';
+      inFlightHandshakesRef.current.delete(senderId);
+      if (handshakeTimeoutsRef.current.has(senderId)) {
+        clearTimeout(handshakeTimeoutsRef.current.get(senderId)!);
+        handshakeTimeoutsRef.current.delete(senderId);
+      }
 
       if (msg.sessionId) {
         sessionIdRef.current = msg.sessionId as string;
@@ -312,10 +349,19 @@ export function useSecureSession(identity?: QSIdentity | null) {
     try {
       setHandshakeState('deriving');
       const senderId = msg.from as string;
+      inFlightHandshakesRef.current.delete(senderId);
+      if (handshakeTimeoutsRef.current.has(senderId)) {
+        clearTimeout(handshakeTimeoutsRef.current.get(senderId)!);
+        handshakeTimeoutsRef.current.delete(senderId);
+      }
+
       const ephemeral = peerEphemeralKeysRef.current.get(senderId) || (
         myX25519.current ? { x25519: myX25519.current, mlkem: myMLKEM.current ?? undefined } : null
       );
-      if (!ephemeral) return;
+      if (!ephemeral) {
+        console.warn(`[QS] Missing ephemeral keys for peer ${senderId}`);
+        return;
+      }
 
       const theirX25519PubKey = base64ToBytes(msg.x25519PublicKey as string);
       const x25519SS = x25519SharedSecret(ephemeral.x25519.privateKey, theirX25519PubKey);
@@ -497,7 +543,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
         // Star Hub: automatically handshake with any new joined peer
         if (isHub) {
           for (const peer of roster) {
-            if (peer.id !== myId && !peerSessionsRef.current.has(peer.id)) {
+            if (peer.id !== myId && !peerSessionsRef.current.has(peer.id) && !inFlightHandshakesRef.current.has(peer.id)) {
               await initiateHandshakeToPeer(peer.id);
             }
           }
@@ -516,6 +562,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
         if (leftId) {
           peerSessionsRef.current.delete(leftId);
           peerEphemeralKeysRef.current.delete(leftId);
+          inFlightHandshakesRef.current.delete(leftId);
+          if (handshakeTimeoutsRef.current.has(leftId)) {
+            clearTimeout(handshakeTimeoutsRef.current.get(leftId)!);
+            handshakeTimeoutsRef.current.delete(leftId);
+          }
         }
         setRoomState(prev => ({
           ...prev,
@@ -534,8 +585,22 @@ export function useSecureSession(identity?: QSIdentity | null) {
         break;
       }
 
+      case 'handshake_request': {
+        const senderId = (msg.from as string) || (msg.to as string);
+        if (isHubRef.current && senderId) {
+          peerSessionsRef.current.delete(senderId);
+          inFlightHandshakesRef.current.delete(senderId);
+          await initiateHandshakeToPeer(senderId, true);
+        }
+        break;
+      }
+
       case 'session_established': {
+        inFlightHandshakesRef.current.clear();
+        handshakeTimeoutsRef.current.forEach(t => clearTimeout(t));
+        handshakeTimeoutsRef.current.clear();
         setHandshakeState('complete');
+        setSession(prev => prev ? { ...prev, handshakeState: 'complete' } : prev);
         soundHapticService.play('handshake');
         soundHapticService.triggerHaptic('success');
         break;
@@ -612,7 +677,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
   // --- Send Encrypted Message (with Star re-encryption routing) ------------
 
-  const sendMessage = useCallback(async (plaintext: string): Promise<void> => {
+  const sendMessage = useCallback(async (plaintext: string, burnDuration?: number): Promise<void> => {
     if (!ws.current) {
       throw new Error('WebSocket not connected');
     }
@@ -636,6 +701,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
       sequenceNumber: seqNum,
       algorithm: `AES-256-GCM|${modeRef.current === 'hybrid' ? 'X25519+ML-KEM-768' : 'X25519'}`,
       timestamp: now,
+      burnDuration,
     };
 
     const aad = buildAAD(meta);
@@ -683,6 +749,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
       displayedAt: now,
       authVerified: true,
       status: 'sent',
+      burnDuration,
+      expiresAt: burnDuration ? now + burnDuration * 1000 : undefined,
     };
 
     setMessages(prev => [...prev, chatMsg]);
@@ -889,6 +957,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
       }
     }
 
+    const burnDuration = rawMeta.burnDuration;
     const chatMsg: ChatMessage = {
       id: rawMeta.messageId,
       sessionId: rawMeta.sessionId,
@@ -903,6 +972,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
       displayedAt: Date.now(),
       authVerified,
       status: 'delivered',
+      burnDuration,
+      expiresAt: burnDuration ? Date.now() + burnDuration * 1000 : undefined,
     };
 
     setMessages(prev => [...prev, chatMsg]);
@@ -921,6 +992,36 @@ export function useSecureSession(identity?: QSIdentity | null) {
       });
     }
   }, []);
+
+  // --- Message Self-Destruct / Local Purge ---------------------------------
+
+  const deleteMessageFromChat = useCallback(async (messageId: string) => {
+    setMessages(prev => prev.filter(m => m.id !== messageId));
+    await StorageService.deleteMessage(messageId).catch(() => {});
+  }, []);
+
+  // --- Handshake Recovery / Manual Re-negotiation --------------------------
+
+  const retryHandshake = useCallback(async () => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    inFlightHandshakesRef.current.clear();
+    handshakeTimeoutsRef.current.forEach(t => clearTimeout(t));
+    handshakeTimeoutsRef.current.clear();
+    setHandshakeState('generating_keys');
+
+    if (isHubRef.current) {
+      for (const p of roomState.participants) {
+        if (p.id !== participantIdRef.current) {
+          await initiateHandshakeToPeer(p.id, true);
+        }
+      }
+    } else if (roomState.hubId) {
+      ws.current.send(JSON.stringify({
+        type: 'handshake_request',
+        to: roomState.hubId,
+      }));
+    }
+  }, [roomState.participants, roomState.hubId, initiateHandshakeToPeer]);
 
   // --- Manual Handshake Trigger --------------------------------------------
 
@@ -963,8 +1064,10 @@ export function useSecureSession(identity?: QSIdentity | null) {
     transferProgress,
     connect,
     initiateHandshake,
+    retryHandshake,
     sendMessage,
     sendFile,
+    deleteMessageFromChat,
     disconnect,
     clearHistory,
   };
