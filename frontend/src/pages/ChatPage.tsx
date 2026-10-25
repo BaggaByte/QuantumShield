@@ -568,54 +568,55 @@ export default function ChatPage({
           /* CONDITION 2: ACTIVE ROOM OPEN -> FULL WHATSAPP CHAT EXPERIENCE */
           <div className="flex-1 flex flex-col h-full overflow-hidden">
             {/* Top WhatsApp Chat App Bar */}
-            <div className="px-4 py-2.5 bg-wa-card border-b border-wa-subtle flex items-center justify-between shrink-0 z-10">
-              <div className="flex items-center gap-3 min-w-0">
+            <div className="px-2.5 sm:px-4 py-2 sm:py-2.5 bg-wa-card border-b border-wa-subtle flex items-center justify-between shrink-0 z-10 gap-2">
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 overflow-hidden">
                 {/* Mobile Back Button */}
                 <button
                   onClick={() => setMobileChatOpen(false)}
-                  className="md:hidden p-1.5 rounded-lg text-wa-muted hover:text-white hover:bg-wa-hover transition-colors"
+                  className="md:hidden p-1.5 rounded-lg text-wa-muted hover:text-white hover:bg-wa-hover transition-colors shrink-0"
+                  aria-label="Back to conversations"
                 >
-                  <ChevronLeft className="w-6 h-6" />
+                  <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
 
                 {/* Room Avatar */}
-                <div className={`w-10 h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(activeRoomId)} flex items-center justify-center text-white shrink-0 shadow`}>
-                  <Shield className="w-5 h-5 text-white" />
+                <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(activeRoomId)} flex items-center justify-center text-white shrink-0 shadow`}>
+                  <Shield className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                 </div>
 
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-white text-base font-mono tracking-wider">
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <span className="font-bold text-white text-sm sm:text-base font-mono tracking-wider truncate">
                       {activeRoomId}
                     </span>
                     <button
                       onClick={copyRoomCode}
                       title="Copy Room Code to share with peers"
-                      className="text-xs text-wa-muted hover:text-wa-teal flex items-center gap-1 transition-colors"
+                      className="text-xs text-wa-muted hover:text-wa-teal flex items-center gap-1 transition-colors shrink-0"
                     >
                       <Copy className="w-3.5 h-3.5" />
-                      {copiedCode && <span className="text-[10px] text-wa-teal font-bold animate-pulse">Copied!</span>}
+                      {copiedCode && <span className="text-[10px] text-wa-teal font-bold animate-pulse hidden sm:inline">Copied!</span>}
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-wa-muted mt-0.5 font-mono">
-                    <span className="flex items-center gap-1 text-wa-teal">
-                      <Users className="w-3.5 h-3.5" />
+                  <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-wa-muted mt-0.5 font-mono overflow-hidden whitespace-nowrap">
+                    <span className="flex items-center gap-1 text-wa-teal shrink-0">
+                      <Users className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                       <span>{roomState.participantCount}/8</span>
                     </span>
-                    <span>•</span>
-                    <span className="text-[11px] text-fuchsia-300 font-semibold">
-                      {roomState.isHub ? "⭐️ Star Hub" : "Spoke Peer"}
+                    <span className="text-white/30 shrink-0">•</span>
+                    <span className="text-fuchsia-300 font-semibold shrink-0">
+                      {roomState.isHub ? "⭐️ Star Hub" : "Spoke"}
                     </span>
-                    <span>•</span>
-                    <span className={handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}>
-                      {handshakeState === "complete" ? "PQ Channel Active ✓" : "Negotiating keys…"}
+                    <span className="text-white/30 shrink-0">•</span>
+                    <span className={`truncate ${handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}`}>
+                      {handshakeState === "complete" ? "PQ Active ✓" : "Negotiating…"}
                     </span>
                   </div>
                 </div>
               </div>
 
               {/* Right Action Icons */}
-              <div className="flex items-center gap-1.5 text-wa-muted">
+              <div className="flex items-center gap-0.5 sm:gap-1 text-wa-muted shrink-0">
                 {/* Zero-Knowledge Push Notification Toggle */}
                 <button
                   onClick={handleTogglePush}
@@ -625,18 +626,18 @@ export default function ChatPage({
                       ? "Zero-Knowledge Push Active (Click to disable)"
                       : "Enable Zero-Knowledge Push Notifications"
                   }
-                  className={`p-2 rounded-full transition-colors ${
+                  className={`p-1.5 sm:p-2 rounded-full transition-colors ${
                     pushStatus === "active"
                       ? "text-wa-teal bg-wa-teal/10 hover:bg-wa-teal/20"
                       : "hover:bg-wa-hover hover:text-white"
                   }`}
                 >
                   {pushStatus === "loading" ? (
-                    <Loader className="w-5 h-5 animate-spin text-wa-teal" />
+                    <Loader className="w-4 h-4 sm:w-5 sm:h-5 animate-spin text-wa-teal" />
                   ) : pushStatus === "active" ? (
-                    <Bell className="w-5 h-5" />
+                    <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
                   ) : (
-                    <BellOff className="w-5 h-5" />
+                    <BellOff className="w-4 h-4 sm:w-5 sm:h-5" />
                   )}
                 </button>
 
@@ -644,29 +645,29 @@ export default function ChatPage({
                 <button
                   onClick={() => setShowRosterModal(!showRosterModal)}
                   title="View Connected Participants"
-                  className={`p-2 rounded-full transition-colors ${
+                  className={`p-1.5 sm:p-2 rounded-full transition-colors ${
                     showRosterModal ? "text-wa-teal bg-wa-teal/10" : "hover:bg-wa-hover hover:text-white"
                   }`}
                 >
-                  <Users className="w-5 h-5" />
+                  <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
 
                 {/* Erase History Button */}
                 <button
                   onClick={() => setConfirmClearOpen(true)}
                   title="Cryptographically Erase Room History"
-                  className="p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                  className="p-1.5 sm:p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors"
                 >
-                  <Trash2 className="w-5 h-5" />
+                  <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
 
                 {/* Leave Room */}
                 <button
                   onClick={handleLeaveRoom}
                   title="Disconnect & Leave Room"
-                  className="p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors ml-1"
+                  className="p-1.5 sm:p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors"
                 >
-                  <LogOut className="w-5 h-5" />
+                  <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
               </div>
             </div>
