@@ -27,6 +27,7 @@ import {
   Globe,
 } from "lucide-react";
 import { api } from "@/services/api";
+import { soundHapticService } from "@/services/SoundHapticService";
 
 interface LandingPageProps {
   onLaunchApp: () => void;
@@ -103,6 +104,9 @@ export default function LandingPage({ onLaunchApp, onCreateRoom }: LandingPagePr
     const text = textToSend || customInput;
     if (!text.trim() || isSimulating) return;
 
+    soundHapticService.play("send");
+    soundHapticService.triggerHaptic("send");
+
     setIsSimulating(true);
     const newId = Date.now().toString();
     const fakeCiphertext = Array.from({ length: 48 }, () =>
@@ -122,12 +126,15 @@ export default function LandingPage({ onLaunchApp, onCreateRoom }: LandingPagePr
     if (!textToSend) setCustomInput("");
 
     setTimeout(() => {
+      soundHapticService.play("delivered");
       setMockMessages((prev) =>
         prev.map((m) => (m.id === newId ? { ...m, status: "delivered" } : m))
       );
     }, 400);
 
     setTimeout(() => {
+      soundHapticService.play("receive");
+      soundHapticService.triggerHaptic("receive");
       setMockMessages((prev) =>
         prev.map((m) => (m.id === newId ? { ...m, status: "read" } : m))
       );

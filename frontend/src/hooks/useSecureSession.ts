@@ -27,6 +27,7 @@ import {
   type FileManifestPayload,
   type FileChunkPayload,
 } from '@/services/FileTransferService';
+import { soundHapticService } from '@/services/SoundHapticService';
 import type { QSIdentity } from '@/services/IdentityService';
 import type {
   CryptoMode, HandshakeState, SessionState, ChatMessage,
@@ -535,6 +536,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
       case 'session_established': {
         setHandshakeState('complete');
+        soundHapticService.play('handshake');
+        soundHapticService.triggerHaptic('success');
         break;
       }
 
@@ -588,6 +591,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
         if (ackMsgId) {
           setMessages(prev => prev.map(m => m.id === ackMsgId ? { ...m, status: 'delivered' } : m));
           StorageService.updateMessageStatus(ackMsgId, 'delivered').catch(() => {});
+          soundHapticService.play('delivered');
         }
         break;
       }
@@ -599,6 +603,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
       case 'error': {
         console.error('[QS] Server error:', msg.message);
         setRoomState(prev => ({ ...prev, error: msg.message as string }));
+        soundHapticService.play('error');
+        soundHapticService.triggerHaptic('error');
         break;
       }
     }
@@ -681,6 +687,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
     setMessages(prev => [...prev, chatMsg]);
     setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+    soundHapticService.play('send');
+    soundHapticService.triggerHaptic('send');
 
     if (identityRef.current && roomIdRef.current) {
       StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(err => {
@@ -899,6 +907,8 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
     setMessages(prev => [...prev, chatMsg]);
     setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+    soundHapticService.play('receive');
+    soundHapticService.triggerHaptic('receive');
 
     pushService.showLocalBackgroundNotification(
       'QuantumShield',

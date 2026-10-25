@@ -4,13 +4,16 @@ import {
   CheckCircle, XCircle, AlertCircle, Key,
   Loader, LogOut, RefreshCw, Eye, X, Check, Fingerprint,
   Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud,
-  Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight, Globe
+  Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight, Globe,
+  Volume2, VolumeX
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
 import { pushService } from "@/services/PushNotificationService";
+import { soundHapticService } from "@/services/SoundHapticService";
 import { useSecureSession } from "@/hooks/useSecureSession";
 import IdentityCard from "@/components/IdentityCard";
+import AudioSettingsModal from "@/components/AudioSettingsModal";
 import type { CryptoMode, ChatMessage, StoredRoomSummary } from "@/types";
 import type { QSIdentity } from "@/services/IdentityService";
 
@@ -53,6 +56,14 @@ export default function ChatPage({
   const [wireModalMsg, setWireModalMsg] = useState<ChatMessage | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [showRosterModal, setShowRosterModal] = useState(false);
+  const [audioModalOpen, setAudioModalOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(soundHapticService.isSoundEnabled());
+
+  useEffect(() => {
+    return soundHapticService.subscribe(() => {
+      setSoundEnabled(soundHapticService.isSoundEnabled());
+    });
+  }, []);
 
   // UX & Feedback
   const [copiedCode, setCopiedCode] = useState(false);
@@ -255,6 +266,8 @@ export default function ChatPage({
     if (!activeRoomId) return;
     navigator.clipboard.writeText(activeRoomId);
     setCopiedCode(true);
+    soundHapticService.play("tap");
+    soundHapticService.triggerHaptic("tap");
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
@@ -341,20 +354,34 @@ export default function ChatPage({
             </button>
             {onBackToHome && (
               <button
-                onClick={onBackToHome}
+                onClick={() => {
+                  soundHapticService.triggerHaptic("tap");
+                  onBackToHome();
+                }}
                 title="Return to Product Landing Page"
-                className="p-2 rounded-full hover:bg-wa-hover text-wa-muted hover:text-cyan-400 transition-colors"
+                className="p-2 rounded-full hover:bg-wa-hover text-wa-muted hover:text-cyan-400 transition-colors active:scale-95"
               >
                 <Globe className="w-5 h-5" />
               </button>
             )}
             <button
               onClick={() => {
+                soundHapticService.triggerHaptic("tap");
+                setAudioModalOpen(true);
+              }}
+              title="Audio & Haptic Feedback Settings"
+              className="p-2 rounded-full hover:bg-wa-hover text-wa-muted hover:text-white transition-colors active:scale-95"
+            >
+              {soundEnabled ? <Volume2 className="w-5 h-5 text-wa-teal" /> : <VolumeX className="w-5 h-5 text-wa-muted" />}
+            </button>
+            <button
+              onClick={() => {
+                soundHapticService.triggerHaptic("tap");
                 setModalTab("create");
                 setNewRoomModalOpen(true);
               }}
               title="New Secure Room"
-              className="p-2 rounded-full bg-wa-teal/10 hover:bg-wa-teal/20 text-wa-teal transition-colors"
+              className="p-2 rounded-full bg-wa-teal/10 hover:bg-wa-teal/20 text-wa-teal transition-colors active:scale-95"
             >
               <Plus className="w-5 h-5" />
             </button>
@@ -1168,6 +1195,12 @@ export default function ChatPage({
           </div>
         </div>
       )}
+
+      {/* Audio & Haptic Feedback Settings Modal */}
+      <AudioSettingsModal
+        isOpen={audioModalOpen}
+        onClose={() => setAudioModalOpen(false)}
+      />
     </div>
   );
 }
