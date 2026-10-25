@@ -1,47 +1,63 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
   CheckCircle, XCircle, AlertCircle, Key,
-  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint,
+  Loader, LogOut, RefreshCw, Eye, X, Check, Fingerprint,
   Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud,
-  Bell, BellOff, Smartphone
+  Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
 import { pushService } from "@/services/PushNotificationService";
 import { useSecureSession } from "@/hooks/useSecureSession";
+import IdentityCard from "@/components/IdentityCard";
 import type { CryptoMode, ChatMessage, StoredRoomSummary } from "@/types";
 import type { QSIdentity } from "@/services/IdentityService";
 
 interface Props {
-  onSessionChange?: (s: { mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number } | null) => void;
   identity?: QSIdentity | null;
+  canInstall?: boolean;
+  onPromptInstall?: () => void;
+  onAliasChange?: (alias: string) => Promise<void> | void;
+  onExportIdentity?: () => string | null;
+  onDestroyIdentity?: () => Promise<void> | void;
+  onSessionChange?: (s: { mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number } | null) => void;
 }
 
-export default function ChatPage({ onSessionChange, identity }: Props) {
-  const [view, setView] = useState<"setup" | "chat">("setup");
+export default function ChatPage({
+  identity,
+  canInstall,
+  onPromptInstall,
+  onAliasChange,
+  onExportIdentity,
+  onDestroyIdentity,
+  onSessionChange
+}: Props) {
+  const [activeRoomId, setActiveRoomId] = useState<string>("");
   const [mode, setMode] = useState<CryptoMode>("hybrid");
-  const [roomIdInput, setRoomIdInput] = useState("");
-  const [activeRoomId, setActiveRoomId] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
-  const [isJoining, setIsJoining] = useState(false);
   const [inputText, setInputText] = useState("");
   const [sendError, setSendError] = useState("");
-  const [wireModalMsg, setWireModalMsg] = useState<ChatMessage | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [copiedWire, setCopiedWire] = useState(false);
-  const [showQuantumSim, setShowQuantumSim] = useState(false);
-  const [quantumAttacking, setQuantumAttacking] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterTab, setFilterTab] = useState<"all" | "rooms" | "direct" | "vault">("all");
   const [recentRooms, setRecentRooms] = useState<StoredRoomSummary[]>([]);
+  
+  // Modals & Drawers
+  const [newRoomModalOpen, setNewRoomModalOpen] = useState(false);
+  const [modalTab, setModalTab] = useState<"create" | "join">("create");
+  const [joinCodeInput, setJoinCodeInput] = useState("");
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
+  const [identityModalOpen, setIdentityModalOpen] = useState(false);
+  const [wireModalMsg, setWireModalMsg] = useState<ChatMessage | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
-  const [attackResult, setAttackResult] = useState<{
-    status: "compromised" | "protected";
-    details: string;
-    revealedText?: string;
-  } | null>(null);
+  const [showRosterModal, setShowRosterModal] = useState(false);
+
+  // UX & Feedback
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedWire, setCopiedWire] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [pushStatus, setPushStatus] = useState<"idle" | "loading" | "active" | "denied">("idle");
-  const [canInstall, setCanInstall] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -52,76 +68,32 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
     initiateHandshake, sendMessage, sendFile, disconnect, clearHistory
   } = useSecureSession(identity);
 
-  const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
-
+  // --- Load Recent Rooms from IndexedDB --------------------------------------
   const loadRecentRooms = async () => {
     try {
       const rooms = await StorageService.getRecentRooms();
       setRecentRooms(rooms);
     } catch (e) {
-      console.error("Failed to load recent rooms:", e);
+      console.error("[QS] Failed to load encrypted recent rooms:", e);
     }
   };
 
   useEffect(() => {
-    if (view === "setup") {
-      loadRecentRooms();
-    }
-  }, [view]);
+    loadRecentRooms();
+  }, [activeRoomId, messages.length]);
 
+  // --- Push & PWA Lifecycle -------------------------------------------------
   useEffect(() => {
     setIsStandalone(pushService.isStandalone());
-    setCanInstall(pushService.canInstallPwa());
-
     const perm = pushService.getPermission();
     if (perm === "granted") {
       setPushStatus("active");
     } else if (perm === "denied") {
       setPushStatus("denied");
     }
-
-    const onCanInstall = () => setCanInstall(true);
-    const onInstalled = () => {
-      setCanInstall(false);
-      setIsStandalone(true);
-    };
-
-    window.addEventListener("qs-can-install-pwa", onCanInstall);
-    window.addEventListener("qs-pwa-installed", onInstalled);
-
-    return () => {
-      window.removeEventListener("qs-can-install-pwa", onCanInstall);
-      window.removeEventListener("qs-pwa-installed", onInstalled);
-    };
   }, []);
 
-  const handleTogglePush = async () => {
-    if (pushStatus === "denied") {
-      alert("Push notifications are currently blocked in browser permissions. Please allow notifications for QuantumShield in your browser settings.");
-      return;
-    }
-    setPushStatus("loading");
-    if (pushStatus === "active") {
-      await pushService.unsubscribeFromRoom(currentRoomCode, roomState.participantId);
-      setPushStatus("idle");
-    } else {
-      const success = await pushService.subscribeToRoom(currentRoomCode, roomState.participantId);
-      if (success) {
-        setPushStatus("active");
-      } else {
-        setPushStatus(pushService.getPermission() === "denied" ? "denied" : "idle");
-      }
-    }
-  };
-
-  const handleInstallPwa = async () => {
-    const installed = await pushService.promptInstallPwa();
-    if (installed) {
-      setCanInstall(false);
-    }
-  };
-
-
+  // --- Propagate Session State ----------------------------------------------
   useEffect(() => {
     if (session && onSessionChange) {
       onSessionChange({
@@ -136,97 +108,90 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
     }
   }, [session, roomState, onSessionChange]);
 
+  // --- Auto-Scroll on Message ------------------------------------------------
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, transferProgress]);
 
-  const handleCreate = async () => {
-    setIsCreating(true);
+  // --- Actions: Create Room --------------------------------------------------
+  const handleCreateRoom = async () => {
+    setIsCreatingRoom(true);
     try {
       const { room_id } = await api.createRoom();
       setActiveRoomId(room_id);
       await connect(room_id, mode);
-      setView("chat");
+      setNewRoomModalOpen(false);
+      setMobileChatOpen(true);
+      await loadRecentRooms();
     } catch (e) {
       alert("Failed to create room: " + (e as Error).message);
     } finally {
-      setIsCreating(false);
+      setIsCreatingRoom(false);
     }
   };
 
-  const handleJoin = async () => {
-    const code = roomIdInput.trim().toUpperCase();
+  // --- Actions: Join Room ----------------------------------------------------
+  const handleJoinRoom = async (codeToJoin?: string) => {
+    const code = (codeToJoin || joinCodeInput).trim().toUpperCase();
     if (!code) return;
-    setIsJoining(true);
+    setIsJoiningRoom(true);
     try {
       setActiveRoomId(code);
       await connect(code, mode);
-      setView("chat");
+      setJoinCodeInput("");
+      setNewRoomModalOpen(false);
+      setMobileChatOpen(true);
+      await loadRecentRooms();
     } catch (e) {
       alert("Failed to join room: " + (e as Error).message);
     } finally {
-      setIsJoining(false);
+      setIsJoiningRoom(false);
     }
   };
 
+  // --- Switch / Resume Room -------------------------------------------------
+  const handleSelectRoom = async (roomId: string) => {
+    if (activeRoomId === roomId) {
+      setMobileChatOpen(true);
+      return;
+    }
+    setActiveRoomId(roomId);
+    await connect(roomId, mode);
+    setMobileChatOpen(true);
+  };
+
+  // --- Send Message ----------------------------------------------------------
   const handleSend = async () => {
     if (!inputText.trim()) return;
     setSendError("");
     try {
       await sendMessage(inputText.trim());
       setInputText("");
+      await loadRecentRooms();
     } catch (e) {
       setSendError((e as Error).message);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  const copyRoomId = () => {
-    if (currentRoomCode) {
-      navigator.clipboard.writeText(currentRoomCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  const handleResumeRoom = async (code: string) => {
-    setActiveRoomId(code);
-    setRoomIdInput(code);
-    setIsJoining(true);
-    try {
-      await connect(code, mode);
-      setView("chat");
-    } catch (e) {
-      alert("Failed to join room: " + (e as Error).message);
-    } finally {
-      setIsJoining(false);
-    }
-  };
-
-  const handleDeleteRoomHistory = async (roomIdToDelete: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm(`Delete encrypted history for room ${roomIdToDelete}? This action cannot be undone.`)) {
-      await StorageService.deleteRoomHistory(roomIdToDelete);
-      await loadRecentRooms();
-    }
-  };
-
+  // --- File Transmission -----------------------------------------------------
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setSendError("");
-    try {
-      await sendFile(file);
-    } catch (err) {
-      setSendError((err as Error).message);
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setSendError("");
+      try {
+        await sendFile(files[0]);
+      } catch (err) {
+        setSendError((err as Error).message);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
     }
   };
 
@@ -255,682 +220,866 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
     }
   };
 
-  const handleDisconnect = () => {
+  // --- Disconnect / Back -----------------------------------------------------
+  const handleLeaveRoom = () => {
     disconnect();
-    setView("setup");
-    setRoomIdInput("");
     setActiveRoomId("");
-    setAttackResult(null);
+    setMobileChatOpen(false);
+    loadRecentRooms();
   };
 
-  const runQuantumAttack = () => {
-    if (messages.length === 0) {
-      alert("Send at least one message first to simulate a quantum harvest attack!");
+  // --- Push Toggle -----------------------------------------------------------
+  const handleTogglePush = async () => {
+    if (pushStatus === "denied") {
+      alert("Push notifications are blocked in your browser settings. Please permit notifications for QuantumShield.");
       return;
     }
-    setQuantumAttacking(true);
-    setAttackResult(null);
-
-    const targetMsg = messages[messages.length - 1];
-
-    setTimeout(() => {
-      setQuantumAttacking(false);
-      if (mode === "classical") {
-        setAttackResult({
-          status: "compromised",
-          details: "Shor's Algorithm solved the Discrete Logarithm Problem (DLP) on Curve25519 in polynomial time O((log N)³). The private scalar was computed, classical ECDH shared secret derived, and AES-256-GCM key recovered!",
-          revealedText: targetMsg.plaintext,
-        });
+    setPushStatus("loading");
+    if (pushStatus === "active") {
+      await pushService.unsubscribeFromRoom(activeRoomId, roomState.participantId);
+      setPushStatus("idle");
+    } else {
+      const success = await pushService.subscribeToRoom(activeRoomId, roomState.participantId);
+      if (success) {
+        setPushStatus("active");
       } else {
-        setAttackResult({
-          status: "protected",
-          details: "Shor's Algorithm successfully broke the classical X25519 secret, BUT failed against ML-KEM-768. The Module Learning With Errors (M-LWE) lattice hardness assumption remains quantum-resistant. Because HKDF requires BOTH secrets, the session key cannot be computed!",
-          revealedText: undefined,
-        });
+        setPushStatus(pushService.getPermission() === "denied" ? "denied" : "idle");
       }
-    }, 1400);
+    }
   };
 
-  const handshakeSteps = [
-    { id: "keygen", name: "1. Ephemeral Keygen", done: handshakeState === "exchanging" || handshakeState === "deriving" || handshakeState === "complete" },
-    { id: "exchange", name: "2. Key Encapsulation", done: handshakeState === "deriving" || handshakeState === "complete" },
-    { id: "derive", name: "3. Dual-HKDF Combiner", done: handshakeState === "complete" },
-    { id: "complete", name: "4. AES-256-GCM Active", done: handshakeState === "complete" },
-  ];
+  // --- Copy Code -------------------------------------------------------------
+  const copyRoomCode = () => {
+    if (!activeRoomId) return;
+    navigator.clipboard.writeText(activeRoomId);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
 
-  if (view === "setup") {
-    return (
-      <div className="max-w-lg mx-auto space-y-6 animate-fade-in">
-        <div className="text-center space-y-2">
-          <div className="flex justify-center">
-            <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
-              <MessageSquare className="w-8 h-8 text-cyan-400" />
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold text-white">Secure Chat</h1>
-          <p className="text-slate-400 text-sm">End-to-end encrypted messaging with post-quantum cryptography</p>
-        </div>
+  // --- Filtered Rooms List ---------------------------------------------------
+  const filteredRooms = useMemo(() => {
+    let list = recentRooms;
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toUpperCase();
+      list = list.filter(r => r.roomId.includes(q) || r.lastMessageSnippet.toUpperCase().includes(q));
+    }
+    if (filterTab === "rooms") {
+      list = list.filter(r => r.messageCount > 1);
+    } else if (filterTab === "vault") {
+      list = list.filter(r => r.messageCount > 0);
+    }
+    return list;
+  }, [recentRooms, searchQuery, filterTab]);
 
-        {/* Mode Selection */}
-        <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-4">
-          <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Key className="w-4 h-4 text-cyan-400" />
-            Cryptographic Mode
-          </h2>
-          <div className="grid grid-cols-2 gap-3">
-            {(["classical", "hybrid"] as CryptoMode[]).map(m => (
-              <button key={m} onClick={() => setMode(m)}
-                className={`p-4 rounded-xl border text-left transition-all ${mode === m
-                  ? "border-cyan-500/60 bg-cyan-500/10"
-                  : "border-white/10 bg-navy-900 hover:border-white/20"
-                }`}>
-                <p className="font-semibold text-white capitalize text-sm">{m}</p>
-                <p className="text-xs text-slate-400 mt-1">
-                  {m === "classical" ? "X25519 + AES-256-GCM" : "X25519 + ML-KEM-768 + AES-256-GCM"}
-                </p>
-              </button>
-            ))}
-          </div>
-          {mode === "hybrid" && (
-            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3 text-xs text-emerald-400">
-              🛡️ Hybrid mode adds ML-KEM-768 post-quantum protection against harvest-now-decrypt-later attacks
-            </div>
-          )}
-        </div>
+  // Deterministic Avatar Gradient Generator
+  const getAvatarGradient = (str: string) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const colors = [
+      "from-teal-500 to-emerald-700",
+      "from-cyan-500 to-blue-700",
+      "from-indigo-500 to-purple-700",
+      "from-emerald-500 to-teal-800",
+      "from-fuchsia-500 to-pink-700",
+      "from-blue-500 to-cyan-800"
+    ];
+    return colors[Math.abs(hash) % colors.length];
+  };
 
-        {/* Create / Join */}
-        <div className="grid grid-cols-1 gap-4">
-          <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-cyan-400" /> Create Group Room
-            </h2>
-            <p className="text-xs text-slate-400">Create a secure room and share the code with up to 7 peers (Star Topology N-Party E2E).</p>
-            <button onClick={handleCreate} disabled={isCreating}
-              className="w-full py-2.5 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-400 font-medium text-sm hover:bg-cyan-500/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
-              {isCreating ? <><Loader className="w-4 h-4 animate-spin" /> Creating…</> : "Create Room"}
-            </button>
-          </div>
-
-          <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-              <LogIn className="w-4 h-4 text-teal-400" /> Join Room
-            </h2>
-            <input
-              value={roomIdInput}
-              onChange={e => setRoomIdInput(e.target.value.toUpperCase())}
-              placeholder="Enter room code (e.g. A1B2C3D4)"
-              className="w-full px-3 py-2 bg-navy-900 border border-white/10 rounded-lg text-white text-sm font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-              maxLength={8}
-            />
-            <button onClick={handleJoin} disabled={isJoining || !roomIdInput.trim()}
-              className="w-full py-2.5 rounded-lg bg-teal-500/20 border border-teal-500/40 text-teal-400 font-medium text-sm hover:bg-teal-500/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
-              {isJoining ? <><Loader className="w-4 h-4 animate-spin" /> Joining…</> : "Join Room"}
-            </button>
-          </div>
-        </div>
-
-        {/* Recent Encrypted Conversations (Phase 2) */}
-        {recentRooms.length > 0 && (
-          <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                <History className="w-4 h-4 text-cyan-400" />
-                <span>Recent Encrypted Conversations</span>
-              </h2>
-              <span className="text-[10px] text-slate-400 font-mono px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
-                AES-256 Vault
-              </span>
-            </div>
-            <p className="text-xs text-slate-400">
-              Encrypted client-side at rest with your identity key. Messages never touch any server disk.
-            </p>
-            <div className="space-y-2 pt-1">
-              {recentRooms.map((r) => (
-                <div
-                  key={r.roomId}
-                  onClick={() => handleResumeRoom(r.roomId)}
-                  className="flex items-center justify-between p-3 rounded-lg bg-navy-900 border border-white/5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition-all cursor-pointer group"
-                >
-                  <div className="space-y-0.5 min-w-0 pr-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono font-bold text-white group-hover:text-cyan-300">
-                        {r.roomId}
-                      </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-slate-400">
-                        {r.messageCount} msg{r.messageCount === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    {r.lastMessageSnippet && (
-                      <p className="text-xs text-slate-400 truncate max-w-xs">
-                        "{r.lastMessageSnippet}"
-                      </p>
-                    )}
-                    <p className="text-[10px] text-slate-500 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(r.lastActivity).toLocaleDateString()} {new Date(r.lastActivity).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={(e) => handleDeleteRoomHistory(r.roomId, e)}
-                      title="Delete encrypted room history"
-                      className="p-1.5 rounded-md text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* PWA & Zero-Knowledge Web Push Card (Phase 5) */}
-        <div className="bg-navy-800/80 border border-white/10 rounded-xl p-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
-              <Smartphone className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-white flex items-center gap-1.5">
-                <span>Progressive Web App</span>
-                {isStandalone && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-normal">
-                    App Mode Active
-                  </span>
-                )}
-              </p>
-              <p className="text-xs text-slate-400">
-                Install as a standalone app with zero-knowledge push alerts.
-              </p>
-            </div>
-          </div>
-          {canInstall && (
-            <button
-              onClick={handleInstallPwa}
-              className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Install</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // --- Chat View -------------------------------------------------------------
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="flex flex-col h-[calc(100vh-10rem)] animate-fade-in relative"
-    >
-      {/* Drag & Drop Visual Overlay */}
-      {isDragging && (
-        <div className="absolute inset-0 z-40 bg-navy-950/90 border-2 border-dashed border-cyan-400 rounded-2xl flex flex-col items-center justify-center gap-3 backdrop-blur-sm animate-fade-in">
-          <UploadCloud className="w-12 h-12 text-cyan-400 animate-bounce" />
-          <p className="text-white text-base font-bold">Drop File to Encrypt & Stream</p>
-          <p className="text-slate-400 text-xs font-mono">End-to-End Post-Quantum File Relay</p>
-        </div>
-      )}
-
-      {/* Chat Header */}
-      <div className="bg-navy-800 border border-white/10 rounded-xl p-4 mb-3 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-2.5 h-2.5 rounded-full ${roomState.connected ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-white font-mono font-bold text-base px-2.5 py-0.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">{currentRoomCode}</span>
-                <button onClick={copyRoomId} className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 rounded-lg transition-colors font-medium">
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copy Code</span>
-                </button>
-                {copied && <span className="text-xs text-emerald-400 font-semibold animate-pulse">Copied!</span>}
-              </div>
-              <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
-                <span className="flex items-center gap-1 font-mono text-cyan-300">
-                  <Users className="w-3.5 h-3.5" />
-                  {roomState.participantCount}/8 participants
-                </span>
-                <span className="capitalize">{mode} mode</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-fuchsia-500/10 border border-fuchsia-500/30 text-fuchsia-300 font-bold uppercase">
-                  {roomState.isHub ? "⭐️ Star Hub" : "Spoke Peer"}
-                </span>
-                <span className={handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}>
-                  {handshakeState === "complete" ? "Established ✓" : "Negotiating keys…"}
-                </span>
-              </div>
+    <div className="h-full w-full flex overflow-hidden bg-wa-dark select-none relative">
+      {/* ===================================================================== */}
+      {/* LEFT PANE: WhatsApp Conversation Roster & Directory                   */}
+      {/* ===================================================================== */}
+      <aside
+        className={`${
+          mobileChatOpen && activeRoomId ? "hidden md:flex" : "flex"
+        } w-full md:w-[360px] lg:w-[400px] xl:w-[420px] shrink-0 border-r border-wa-subtle bg-wa-panel flex-col h-full z-20`}
+      >
+        {/* Top User Bar */}
+        <div className="p-3.5 bg-wa-card border-b border-wa-subtle flex items-center justify-between">
+          <div
+            onClick={() => setIdentityModalOpen(true)}
+            className="flex items-center gap-3 cursor-pointer group hover:opacity-90 transition-opacity"
+            title="View Identity Key & QR Profile"
+          >
+            <div className={`w-10 h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(identity?.fingerprint || "user")} flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-emerald-500/30`}>
+              {identity?.alias ? identity.alias.slice(0, 2).toUpperCase() : <Shield className="w-5 h-5 text-white" />}
+            </div>
+            <div className="min-w-0">
+              <p className="font-semibold text-white text-sm truncate flex items-center gap-1.5 group-hover:text-wa-teal transition-colors">
+                <span>{identity?.alias || "Anonymous Agent"}</span>
+              </p>
+              <p className="text-[11px] font-mono text-wa-muted flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-wa-teal animate-pulse" />
+                <span>{identity?.fingerprint || "Key Active"}</span>
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-xs font-mono text-cyan-300" title="All messages are stored client-side using AES-256-GCM IndexedDB">
-              <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
-              <span>AES-256 Vault</span>
-            </div>
+
+          {/* Quick Header Actions */}
+          <div className="flex items-center gap-1 text-wa-muted">
             {canInstall && (
               <button
-                onClick={handleInstallPwa}
-                className="px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                title="Install QuantumShield as Standalone Progressive Web App"
+                onClick={onPromptInstall}
+                title="Install QuantumShield as PWA App"
+                className="p-2 rounded-full hover:bg-wa-hover text-wa-teal hover:text-white transition-colors"
               >
-                <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden sm:inline">Install PWA</span>
+                <Smartphone className="w-5 h-5" />
               </button>
             )}
             <button
-              onClick={handleTogglePush}
-              disabled={pushStatus === 'loading'}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                pushStatus === 'active'
-                  ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                  : pushStatus === 'denied'
-                  ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
-                  : 'bg-white/5 text-slate-300 hover:text-white border border-white/10'
-              }`}
-              title={
-                pushStatus === 'active'
-                  ? 'Zero-Knowledge Push Notifications Active (Click to unsubscribe)'
-                  : pushStatus === 'denied'
-                  ? 'Push notifications blocked by browser permission'
-                  : 'Enable Zero-Knowledge Push Notifications'
-              }
+              onClick={() => setIdentityModalOpen(true)}
+              title="Identity & QR Export"
+              className="p-2 rounded-full hover:bg-wa-hover hover:text-white transition-colors"
             >
-              {pushStatus === 'loading' ? (
-                <Loader className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-              ) : pushStatus === 'active' ? (
-                <Bell className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <BellOff className="w-3.5 h-3.5 text-slate-400" />
-              )}
-              <span className="hidden sm:inline">{pushStatus === 'active' ? 'Push Active' : pushStatus === 'denied' ? 'Push Blocked' : 'Enable Push'}</span>
+              <QrCode className="w-5 h-5" />
             </button>
-            {session?.sessionKeyFingerprint && (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                <Shield className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="font-mono text-xs text-emerald-400">{session.sessionKeyFingerprint}</span>
-              </div>
-            )}
             <button
-              onClick={() => setShowQuantumSim(!showQuantumSim)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                showQuantumSim ? "bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40" : "bg-white/5 text-slate-300 hover:text-white border border-white/10"
-              }`}
+              onClick={() => {
+                setModalTab("create");
+                setNewRoomModalOpen(true);
+              }}
+              title="New Secure Room"
+              className="p-2 rounded-full bg-wa-teal/10 hover:bg-wa-teal/20 text-wa-teal transition-colors"
             >
-              <Atom className="w-3.5 h-3.5 text-fuchsia-400" />
-              <span>Quantum Simulator</span>
-            </button>
-            {roomState.participantCount >= 2 && handshakeState !== "complete" && (
-              <button
-                onClick={() => initiateHandshake()}
-                className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors animate-pulse"
-              >
-                <Key className="w-3.5 h-3.5" />
-                <span>Start Handshake</span>
-              </button>
-            )}
-            <button
-              onClick={() => setConfirmClearOpen(true)}
-              title="Clear Room History (Cryptographic Erase)"
-              className="p-2 rounded-lg border border-white/10 text-slate-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-            <button onClick={handleDisconnect}
-              className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">
-              <LogOut className="w-4 h-4" />
+              <Plus className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Live Handshake Stepper Bar */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-white/5">
-          {handshakeSteps.map((step, idx) => (
+        {/* Search Bar & Instant Join */}
+        <div className="p-2.5 border-b border-wa-subtle bg-wa-panel">
+          <div className="relative flex items-center bg-wa-card border border-wa-subtle rounded-xl px-3 py-1.5 focus-within:border-wa-teal transition-colors">
+            <Search className="w-4 h-4 text-wa-muted shrink-0 mr-2.5" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search or enter room code…"
+              className="w-full bg-transparent text-sm text-wa-body placeholder-wa-muted focus:outline-none"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} className="text-wa-muted hover:text-white">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Instant Join Prompt if user typed 8 characters */}
+          {searchQuery.trim().length === 8 && !recentRooms.some(r => r.roomId === searchQuery.trim().toUpperCase()) && (
             <div
-              key={step.id}
-              className={`flex items-center gap-2 p-2 rounded-lg border text-xs font-mono transition-all ${
-                step.done
-                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                  : handshakeState !== "idle" && idx === 0
-                  ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300 animate-pulse"
-                  : "bg-navy-900 border-white/5 text-slate-500"
+              onClick={() => handleJoinRoom(searchQuery.trim())}
+              className="mt-2 p-2.5 rounded-lg bg-wa-teal/10 border border-wa-teal/30 hover:bg-wa-teal/20 transition-all cursor-pointer flex items-center justify-between text-xs animate-fade-in"
+            >
+              <div className="flex items-center gap-2 text-wa-teal font-semibold">
+                <LogIn className="w-4 h-4" />
+                <span>Join Room "{searchQuery.trim().toUpperCase()}"</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-wa-teal" />
+            </div>
+          )}
+        </div>
+
+        {/* WhatsApp-Style Filter Pills */}
+        <div className="px-3 py-2 flex items-center gap-1.5 border-b border-wa-subtle bg-wa-panel overflow-x-auto text-xs font-medium">
+          {(["all", "rooms", "vault"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setFilterTab(tab)}
+              className={`px-3 py-1 rounded-full transition-colors capitalize ${
+                filterTab === tab
+                  ? "bg-wa-teal/20 text-wa-teal border border-wa-teal/40 font-semibold"
+                  : "bg-wa-card text-wa-muted hover:text-white border border-wa-subtle"
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${step.done ? "bg-emerald-400" : "bg-slate-600"}`} />
-              <span className="truncate">{step.name}</span>
-            </div>
+              {tab === "all" ? "All Chats" : tab === "rooms" ? "Active Rooms" : "Encrypted Vault"}
+            </button>
           ))}
         </div>
 
-        {/* Multi-Participant Roster (Phase 3 Star Topology) */}
-        {roomState.participants && roomState.participants.length > 0 && (
-          <div className="flex items-center gap-2 pt-2 border-t border-white/5 flex-wrap">
-            <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1 mr-1">
-              <Users className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Group Roster ({roomState.participantCount}/8):</span>
-            </span>
-            {roomState.participants.map((p) => {
-              const isSelf = p.id === roomState.participantId;
-              const isHub = p.role === "hub" || p.id === roomState.hubId;
+        {/* Conversations Scroll Area */}
+        <div className="flex-1 overflow-y-auto divide-y divide-wa-subtle">
+          {filteredRooms.length === 0 ? (
+            <div className="p-8 text-center flex flex-col items-center justify-center gap-3 text-wa-muted">
+              <div className="w-12 h-12 rounded-full bg-wa-card border border-wa-subtle flex items-center justify-center text-wa-muted">
+                <MessageSquare className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white">No encrypted chats yet</p>
+                <p className="text-xs text-wa-muted mt-1 max-w-[220px]">
+                  Create a new secure room or enter an 8-character code to begin.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setModalTab("create");
+                  setNewRoomModalOpen(true);
+                }}
+                className="mt-2 px-4 py-2 rounded-xl bg-wa-teal hover:bg-[#00c298] text-white text-xs font-semibold shadow-md transition-colors"
+              >
+                Start New Room
+              </button>
+            </div>
+          ) : (
+            filteredRooms.map((room) => {
+              const isActive = activeRoomId === room.roomId;
               return (
                 <div
-                  key={p.id}
-                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-xs font-mono transition-all ${
-                    isSelf
-                      ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300"
-                      : isHub
-                      ? "bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-300"
-                      : "bg-navy-900 border-white/10 text-slate-300"
+                  key={room.roomId}
+                  onClick={() => handleSelectRoom(room.roomId)}
+                  className={`flex items-center justify-between p-3.5 hover:bg-wa-hover cursor-pointer transition-colors group relative ${
+                    isActive ? "bg-wa-card border-l-4 border-wa-teal" : ""
                   }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full ${isHub ? "bg-fuchsia-400" : "bg-emerald-400"}`} />
-                  <span className="font-semibold">{p.alias || (isSelf ? "You" : `Peer ${p.id.slice(0, 4)}`)}</span>
-                  {p.fingerprint && (
-                    <span className="text-[10px] text-slate-400 font-mono">({p.fingerprint})</span>
-                  )}
-                  <span className={`text-[9px] px-1 py-0.2 rounded font-bold uppercase ${
-                    isHub ? "bg-fuchsia-500/20 text-fuchsia-300" : "bg-slate-700 text-slate-300"
-                  }`}>
-                    {isHub ? "HUB" : "PEER"}
-                  </span>
+                  <div className="flex items-center gap-3 min-w-0 pr-2">
+                    <div className={`w-11 h-11 rounded-full bg-gradient-to-tr ${getAvatarGradient(room.roomId)} flex items-center justify-center text-white shrink-0 shadow`}>
+                      <Shield className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-white truncate group-hover:text-wa-teal transition-colors">
+                          {room.roomId}
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-wa-panel border border-wa-subtle text-wa-muted font-mono">
+                          PQ
+                        </span>
+                      </div>
+                      <p className="text-xs text-wa-muted truncate flex items-center gap-1">
+                        {room.lastMessageSnippet ? (
+                          <span>{room.lastMessageSnippet}</span>
+                        ) : (
+                          <span className="italic">Secure room active</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-1.5 shrink-0 text-[11px] text-wa-muted font-mono">
+                    <span>
+                      {new Date(room.lastActivity).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.2 rounded-full bg-wa-card border border-wa-subtle text-[10px] text-wa-muted">
+                        {room.messageCount} msg{room.messageCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Quantum Adversary Simulation Panel */}
-      {showQuantumSim && (
-        <div className="bg-navy-900/95 border border-fuchsia-500/30 rounded-xl p-4 mb-3 space-y-3 backdrop-blur shadow-2xl animate-fade-in">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Atom className="w-5 h-5 text-fuchsia-400 animate-spin-slow" />
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
-                Harvest Now, Decrypt Later (HNDL) Adversary Simulator
-              </h3>
-            </div>
-            <button onClick={() => setShowQuantumSim(false)} className="text-slate-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Simulate a nation-state eavesdropper intercepting your ciphertext today and executing <strong>Shor's Algorithm</strong> on a Cryptanalytically Relevant Quantum Computer (CRQC) in the future.
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={runQuantumAttack}
-              disabled={quantumAttacking}
-              className="px-4 py-2 bg-fuchsia-500/20 hover:bg-fuchsia-500/30 text-fuchsia-300 border border-fuchsia-500/50 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all disabled:opacity-50"
-            >
-              {quantumAttacking ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              <span>Simulate Shor's Algorithm Attack</span>
-            </button>
-            <span className="text-xs font-mono text-slate-400">
-              Active mode: <strong className="text-cyan-400 capitalize">{mode}</strong>
-            </span>
-          </div>
-
-          {/* Attack Outcome */}
-          {attackResult && (
-            <div className={`p-3.5 rounded-xl border text-xs font-mono space-y-2 animate-fade-in ${
-              attackResult.status === "compromised"
-                ? "bg-red-500/10 border-red-500/40 text-red-300"
-                : "bg-emerald-500/10 border-emerald-500/40 text-emerald-300"
-            }`}>
-              <div className="flex items-center gap-2 font-bold uppercase tracking-wider text-sm">
-                {attackResult.status === "compromised" ? <XCircle className="w-4 h-4 text-red-400" /> : <CheckCircle className="w-4 h-4 text-emerald-400" />}
-                <span>{attackResult.status === "compromised" ? "⚠️ Classical Traffic Compromised!" : "🛡️ Hybrid Traffic Quantum-Resistant!"}</span>
-              </div>
-              <p className="text-xs leading-relaxed text-slate-200">{attackResult.details}</p>
-              {attackResult.revealedText && (
-                <div className="bg-black/50 p-2.5 rounded-lg border border-red-500/30">
-                  <span className="text-red-400 uppercase font-bold text-[10px] block">Recovered Plaintext:</span>
-                  <span className="text-white text-sm font-semibold">{attackResult.revealedText}</span>
-                </div>
-              )}
-            </div>
+            })
           )}
         </div>
-      )}
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
-        {roomState.participantCount < 2 && handshakeState === "idle" && (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-            <div className="p-4 rounded-full bg-cyan-500/10 border border-cyan-500/20">
-              <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin-slow" />
-            </div>
-            <div>
-              <p className="text-white font-semibold text-lg">Waiting for peer to join…</p>
-              <p className="text-slate-400 text-sm mt-1">Share this room code with your peer:</p>
-              <div className="mt-3 inline-flex items-center gap-3 px-4 py-2 bg-navy-900 border border-cyan-500/40 rounded-xl shadow-lg">
-                <span className="text-cyan-400 font-mono text-xl font-bold tracking-widest">{currentRoomCode}</span>
-                <button onClick={copyRoomId} className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors">
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copy</span>
-                </button>
+        {/* Vault Footer Status */}
+        <div className="p-3 bg-wa-card/60 border-t border-wa-subtle flex items-center justify-between text-[11px] text-wa-muted font-mono">
+          <div className="flex items-center gap-1.5 text-wa-teal">
+            <HardDrive className="w-3.5 h-3.5" />
+            <span>Client AES-256 Vault Active</span>
+          </div>
+          <span className="text-[10px] text-slate-500">Zero Cloud Archive</span>
+        </div>
+      </aside>
+
+      {/* ===================================================================== */}
+      {/* RIGHT PANE: WhatsApp Active Chat Window or Welcome Splash             */}
+      {/* ===================================================================== */}
+      <main
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`${
+          !mobileChatOpen && !activeRoomId ? "hidden md:flex" : "flex"
+        } flex-1 flex-col h-full bg-wa-dark relative overflow-hidden`}
+      >
+        {/* Drag & Drop Visual Overlay */}
+        {isDragging && (
+          <div className="absolute inset-0 z-40 bg-wa-dark/95 border-2 border-dashed border-wa-teal flex flex-col items-center justify-center gap-3 backdrop-blur-sm animate-fade-in">
+            <UploadCloud className="w-14 h-14 text-wa-teal animate-bounce" />
+            <p className="text-white text-lg font-bold">Drop File to Encrypt & Transmit</p>
+            <p className="text-wa-muted text-xs font-mono">End-to-End Post-Quantum AES-256-GCM Streaming</p>
+          </div>
+        )}
+
+        {/* CONDITION 1: NO ACTIVE ROOM -> WHATSAPP WEB WELCOME SPLASH SCREEN */}
+        {!activeRoomId ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center qs-doodle-bg relative">
+            <div className="max-w-md space-y-6 animate-fade-in">
+              <div className="relative mx-auto w-24 h-24 rounded-full bg-wa-card border border-wa-subtle flex items-center justify-center shadow-2xl">
+                <div className="absolute inset-0 rounded-full border border-wa-teal/30 animate-ping opacity-25" />
+                <Shield className="w-12 h-12 text-wa-teal" />
               </div>
-              {copied && <p className="text-xs text-emerald-400 mt-2 font-medium">Copied to clipboard!</p>}
-            </div>
-          </div>
-        )}
 
-        {handshakeState === "complete" && messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-3">
-            <div className="p-4 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-              <Lock className="w-8 h-8 text-emerald-400" />
-            </div>
-            <div>
-              <p className="text-emerald-400 font-medium">Secure channel established</p>
-              <p className="text-slate-400 text-sm mt-1">Session key: <span className="font-mono">{session?.sessionKeyFingerprint}</span></p>
-              <p className="text-slate-500 text-xs mt-1">Type a message below to begin messaging</p>
-            </div>
-          </div>
-        )}
-
-        {messages.map(msg => (
-          <div key={msg.id} className={`flex ${msg.senderRole === "self" ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-xs lg:max-w-md rounded-xl px-4 py-3 border transition-colors ${
-                msg.senderRole === "self"
-                  ? "bg-cyan-500/15 border-cyan-500/30 text-white"
-                  : "bg-navy-800 border-white/10 text-white"
-              }`}
-            >
-              {msg.senderRole === "peer" && (
-                <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-mono text-cyan-300 pb-1 border-b border-white/5">
-                  <span className="font-bold">{msg.senderAlias || `Peer ${msg.senderId.slice(0, 4)}`}</span>
-                  {msg.senderFingerprint && (
-                    <span className="text-[10px] text-slate-400 font-normal">({msg.senderFingerprint})</span>
-                  )}
-                </div>
-              )}
-              {/* Attachment Display (Phase 4 File & Image Sharing) */}
-              {msg.attachment && (
-                <div className="mb-2">
-                  {msg.attachment.isImage ? (
-                    <div className="relative group overflow-hidden rounded-lg border border-white/10 bg-black/40">
-                      <img
-                        src={msg.attachment.blobUrl || msg.attachment.dataUrl}
-                        alt={msg.attachment.fileName}
-                        className="max-h-60 w-auto rounded-lg object-contain cursor-pointer hover:opacity-95 transition-opacity"
-                        onClick={() => {
-                          if (msg.attachment?.blobUrl) {
-                            window.open(msg.attachment.blobUrl, "_blank");
-                          }
-                        }}
-                      />
-                      <div className="flex items-center justify-between px-2 py-1 text-[10px] text-slate-300 font-mono bg-navy-950/80">
-                        <span className="truncate max-w-[150px]">{msg.attachment.fileName}</span>
-                        <span>{(msg.attachment.fileSize / 1024).toFixed(1)} KB</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between p-2.5 rounded-lg border border-white/10 bg-navy-900/80 gap-3">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-5 h-5 text-cyan-400 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold text-white truncate max-w-[180px]">
-                            {msg.attachment.fileName}
-                          </p>
-                          <p className="text-[10px] text-slate-400 font-mono">
-                            {(msg.attachment.fileSize / 1024).toFixed(1)} KB
-                          </p>
-                        </div>
-                      </div>
-                      {msg.attachment.blobUrl && (
-                        <a
-                          href={msg.attachment.blobUrl}
-                          download={msg.attachment.fileName}
-                          className="p-1.5 rounded-md bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 transition-colors"
-                          title="Download file"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-start justify-between gap-3">
-                <p className={`text-sm break-words ${msg.authVerified ? "text-white" : "text-red-400"}`}>
-                  {msg.authVerified ? msg.plaintext : "⚠️ Authentication failed — message rejected"}
+              <div className="space-y-2">
+                <h1 className="text-2xl font-bold text-white tracking-tight">QuantumShield Web</h1>
+                <p className="text-sm text-wa-muted leading-relaxed">
+                  Post-quantum end-to-end encrypted messaging, group channels, and file streaming. No accounts or phone numbers required.
                 </p>
               </div>
 
-              <div className="flex items-center justify-between gap-3 mt-2 pt-1 border-t border-white/5 text-[11px] font-mono text-slate-400">
-                <div className="flex items-center gap-1.5">
-                  <span>{new Date(msg.displayedAt).toLocaleTimeString()}</span>
-                  {msg.authVerified ? (
-                    <span className="text-emerald-400 flex items-center gap-0.5">
-                      <CheckCircle className="w-3 h-3" /> Auth OK
-                    </span>
-                  ) : (
-                    <span className="text-red-400 flex items-center gap-0.5">
-                      <XCircle className="w-3 h-3" /> Bad Tag
-                    </span>
-                  )}
-                  {msg.senderRole === "self" && (
-                    <span
-                      className="flex items-center ml-1 text-xs"
-                      title={msg.status === "delivered" ? "Delivered to peer (acknowledged)" : "Sent to relay"}
-                    >
-                      {msg.status === "delivered" ? (
-                        <span className="text-cyan-400 flex items-center font-bold tracking-tighter">
-                          <Check className="w-3.5 h-3.5" />
-                          <Check className="w-3.5 h-3.5 -ml-2" />
-                        </span>
-                      ) : (
-                        <Check className="w-3.5 h-3.5 text-slate-400" />
-                      )}
-                    </span>
-                  )}
-                </div>
-
+              <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
-                  onClick={() => setWireModalMsg(msg)}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-cyan-300 hover:text-cyan-200 transition-colors"
+                  onClick={() => {
+                    setModalTab("create");
+                    setNewRoomModalOpen(true);
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-wa-teal hover:bg-[#00c298] text-white font-semibold text-sm shadow-lg shadow-teal-950/40 transition-all flex items-center justify-center gap-2"
                 >
-                  <Eye className="w-3 h-3" />
-                  <span>Inspect Wire</span>
+                  <Plus className="w-4 h-4" />
+                  <span>New Secure Room</span>
                 </button>
+                <button
+                  onClick={() => {
+                    setModalTab("join");
+                    setNewRoomModalOpen(true);
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-wa-card hover:bg-wa-hover border border-wa-subtle text-white font-semibold text-sm transition-all flex items-center justify-center gap-2"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Join with Code</span>
+                </button>
+              </div>
+
+              <div className="pt-6 border-t border-wa-subtle text-xs text-wa-muted space-y-1 font-mono">
+                <p className="flex items-center justify-center gap-1.5 text-wa-teal font-semibold">
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Protected by ML-KEM-768 + Curve25519</span>
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Messages are encrypted client-side and never saved to any server disk.
+                </p>
               </div>
             </div>
           </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
+        ) : (
+          /* CONDITION 2: ACTIVE ROOM OPEN -> FULL WHATSAPP CHAT EXPERIENCE */
+          <div className="flex-1 flex flex-col h-full overflow-hidden">
+            {/* Top WhatsApp Chat App Bar */}
+            <div className="px-4 py-2.5 bg-wa-card border-b border-wa-subtle flex items-center justify-between shrink-0 z-10">
+              <div className="flex items-center gap-3 min-w-0">
+                {/* Mobile Back Button */}
+                <button
+                  onClick={() => setMobileChatOpen(false)}
+                  className="md:hidden p-1.5 rounded-lg text-wa-muted hover:text-white hover:bg-wa-hover transition-colors"
+                >
+                  <ChevronLeft className="w-6 h-6" />
+                </button>
 
-      {/* File Transfer Streaming Progress Bar (Phase 4) */}
-      {transferProgress && (
-        <div className="bg-navy-900 border border-cyan-500/30 rounded-xl p-3 mb-2 space-y-1.5 animate-fade-in text-xs font-mono">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-cyan-400">
-              <UploadCloud className="w-4 h-4 animate-bounce" />
-              <span className="font-bold truncate max-w-[200px]">
-                {transferProgress.direction === "sending" ? "Streaming Encrypted File:" : "Receiving Encrypted File:"} {transferProgress.fileName}
-              </span>
+                {/* Room Avatar */}
+                <div className={`w-10 h-10 rounded-full bg-gradient-to-tr ${getAvatarGradient(activeRoomId)} flex items-center justify-center text-white shrink-0 shadow`}>
+                  <Shield className="w-5 h-5 text-white" />
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white text-base font-mono tracking-wider">
+                      {activeRoomId}
+                    </span>
+                    <button
+                      onClick={copyRoomCode}
+                      title="Copy Room Code to share with peers"
+                      className="text-xs text-wa-muted hover:text-wa-teal flex items-center gap-1 transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      {copiedCode && <span className="text-[10px] text-wa-teal font-bold animate-pulse">Copied!</span>}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-wa-muted mt-0.5 font-mono">
+                    <span className="flex items-center gap-1 text-wa-teal">
+                      <Users className="w-3.5 h-3.5" />
+                      <span>{roomState.participantCount}/8</span>
+                    </span>
+                    <span>•</span>
+                    <span className="text-[11px] text-fuchsia-300 font-semibold">
+                      {roomState.isHub ? "⭐️ Star Hub" : "Spoke Peer"}
+                    </span>
+                    <span>•</span>
+                    <span className={handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}>
+                      {handshakeState === "complete" ? "PQ Channel Active ✓" : "Negotiating keys…"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Action Icons */}
+              <div className="flex items-center gap-1.5 text-wa-muted">
+                {/* Zero-Knowledge Push Notification Toggle */}
+                <button
+                  onClick={handleTogglePush}
+                  disabled={pushStatus === "loading"}
+                  title={
+                    pushStatus === "active"
+                      ? "Zero-Knowledge Push Active (Click to disable)"
+                      : "Enable Zero-Knowledge Push Notifications"
+                  }
+                  className={`p-2 rounded-full transition-colors ${
+                    pushStatus === "active"
+                      ? "text-wa-teal bg-wa-teal/10 hover:bg-wa-teal/20"
+                      : "hover:bg-wa-hover hover:text-white"
+                  }`}
+                >
+                  {pushStatus === "loading" ? (
+                    <Loader className="w-5 h-5 animate-spin text-wa-teal" />
+                  ) : pushStatus === "active" ? (
+                    <Bell className="w-5 h-5" />
+                  ) : (
+                    <BellOff className="w-5 h-5" />
+                  )}
+                </button>
+
+                {/* Participant Roster Button */}
+                <button
+                  onClick={() => setShowRosterModal(!showRosterModal)}
+                  title="View Connected Participants"
+                  className={`p-2 rounded-full transition-colors ${
+                    showRosterModal ? "text-wa-teal bg-wa-teal/10" : "hover:bg-wa-hover hover:text-white"
+                  }`}
+                >
+                  <Users className="w-5 h-5" />
+                </button>
+
+                {/* Erase History Button */}
+                <button
+                  onClick={() => setConfirmClearOpen(true)}
+                  title="Cryptographically Erase Room History"
+                  className="p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+
+                {/* Leave Room */}
+                <button
+                  onClick={handleLeaveRoom}
+                  title="Disconnect & Leave Room"
+                  className="p-2 rounded-full hover:bg-red-500/10 hover:text-red-400 transition-colors ml-1"
+                >
+                  <LogOut className="w-5 h-5" />
+                </button>
+              </div>
             </div>
-            <span className="text-slate-400">
-              {transferProgress.percentage}% ({transferProgress.transferredChunks}/{transferProgress.totalChunks} chunks)
-            </span>
+
+            {/* Live Participant Roster Dropdown Panel */}
+            {showRosterModal && (
+              <div className="bg-wa-card border-b border-wa-subtle p-3 animate-fade-in text-xs font-mono">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-white uppercase text-[11px] tracking-wider flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-wa-teal" />
+                    <span>Connected Participants ({roomState.participantCount}/8)</span>
+                  </span>
+                  <button onClick={() => setShowRosterModal(false)} className="text-wa-muted hover:text-white">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {roomState.participants.map((p) => {
+                    const isSelf = p.id === roomState.participantId;
+                    const isHub = p.role === "hub" || p.id === roomState.hubId;
+                    return (
+                      <div
+                        key={p.id}
+                        className={`px-2.5 py-1 rounded-lg border flex items-center gap-2 ${
+                          isSelf
+                            ? "bg-wa-teal/10 border-wa-teal/40 text-wa-teal"
+                            : isHub
+                            ? "bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-300"
+                            : "bg-wa-panel border-wa-subtle text-wa-body"
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full ${isHub ? "bg-fuchsia-400" : "bg-wa-teal"}`} />
+                        <span className="font-semibold">{p.alias || (isSelf ? "You" : `Peer ${p.id.slice(0, 4)}`)}</span>
+                        {p.fingerprint && <span className="text-[10px] text-wa-muted">({p.fingerprint})</span>}
+                        <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-black/40">
+                          {isHub ? "HUB" : "PEER"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Chat Messages Scroll Canvas with WhatsApp Vector Wallpaper */}
+            <div className="flex-1 overflow-y-auto px-4 md:px-12 py-4 space-y-3 qs-doodle-bg">
+              {/* Centered WhatsApp Date Separator */}
+              <div className="flex justify-center my-2">
+                <span className="px-3 py-1 rounded-lg bg-wa-card border border-wa-subtle text-[11px] font-mono text-wa-muted uppercase tracking-wider shadow">
+                  Today · Encrypted Channel
+                </span>
+              </div>
+
+              {/* Waiting for Peer Screen */}
+              {roomState.participantCount < 2 && handshakeState === "idle" && (
+                <div className="flex flex-col items-center justify-center p-8 text-center gap-3 my-6">
+                  <div className="p-4 rounded-full bg-wa-card border border-wa-subtle">
+                    <RefreshCw className="w-8 h-8 text-wa-teal animate-spin-slow" />
+                  </div>
+                  <div>
+                    <p className="text-white font-bold text-base">Waiting for peer to join…</p>
+                    <p className="text-xs text-wa-muted mt-1">Share this room code with other participants:</p>
+                    <div className="mt-3 inline-flex items-center gap-3 px-4 py-2 bg-wa-card border border-wa-teal/40 rounded-xl shadow-lg">
+                      <span className="text-wa-teal font-mono text-xl font-bold tracking-widest">{activeRoomId}</span>
+                      <button
+                        onClick={copyRoomCode}
+                        className="px-3 py-1 rounded-lg bg-wa-teal/20 text-wa-teal hover:bg-wa-teal/30 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Render Messages */}
+              {messages.map((msg) => {
+                const isSelf = msg.senderRole === "self";
+                return (
+                  <div
+                    key={msg.id}
+                    className={`flex ${isSelf ? "justify-end" : "justify-start"} group animate-fade-in`}
+                  >
+                    <div
+                      className={`max-w-[85%] md:max-w-md lg:max-w-lg rounded-2xl px-3.5 py-2.5 shadow-md relative transition-all ${
+                        isSelf
+                          ? "bg-wa-outgoing text-wa-body rounded-tr-none border border-emerald-500/20"
+                          : "bg-wa-incoming text-wa-body rounded-tl-none border border-wa-subtle"
+                      }`}
+                    >
+                      {/* Sender Alias in Group Chats */}
+                      {!isSelf && (
+                        <div className="flex items-center gap-1.5 mb-1 text-xs font-bold text-wa-teal pb-1 border-b border-white/5">
+                          <span>{msg.senderAlias || `Peer ${msg.senderId.slice(0, 4)}`}</span>
+                          {msg.senderFingerprint && (
+                            <span className="text-[10px] text-wa-muted font-normal font-mono">
+                              ({msg.senderFingerprint})
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* File / Image Attachment */}
+                      {msg.attachment && (
+                        <div className="mb-2">
+                          {msg.attachment.isImage ? (
+                            <div className="relative overflow-hidden rounded-xl border border-black/20 bg-black/40">
+                              <img
+                                src={msg.attachment.blobUrl || msg.attachment.dataUrl}
+                                alt={msg.attachment.fileName}
+                                className="max-h-72 w-auto rounded-xl object-contain cursor-pointer hover:opacity-95 transition-opacity"
+                                onClick={() => {
+                                  if (msg.attachment?.blobUrl) {
+                                    window.open(msg.attachment.blobUrl, "_blank");
+                                  }
+                                }}
+                              />
+                              <div className="flex items-center justify-between px-2.5 py-1 text-[11px] font-mono text-slate-300 bg-black/60">
+                                <span className="truncate max-w-[200px]">{msg.attachment.fileName}</span>
+                                <span>{(msg.attachment.fileSize / 1024).toFixed(1)} KB</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between p-3 rounded-xl border border-black/20 bg-black/30 gap-3">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <FileText className="w-6 h-6 text-wa-teal shrink-0" />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-white truncate max-w-[200px]">
+                                    {msg.attachment.fileName}
+                                  </p>
+                                  <p className="text-[10px] text-wa-muted font-mono">
+                                    {(msg.attachment.fileSize / 1024).toFixed(1)} KB
+                                  </p>
+                                </div>
+                              </div>
+                              {msg.attachment.blobUrl && (
+                                <a
+                                  href={msg.attachment.blobUrl}
+                                  download={msg.attachment.fileName}
+                                  className="p-2 rounded-lg bg-wa-teal/20 hover:bg-wa-teal/30 text-wa-teal transition-colors"
+                                  title="Download file"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Message Text Content */}
+                      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap select-text">
+                        {msg.authVerified ? msg.plaintext : "⚠️ Authentication failed — message rejected"}
+                      </p>
+
+                      {/* Micro Timestamp & WhatsApp Delivery Status */}
+                      <div className="flex items-center justify-end gap-1.5 mt-1 text-[10px] font-mono text-slate-300/80">
+                        <span>{new Date(msg.displayedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                        
+                        {/* Status Checkmarks */}
+                        {isSelf ? (
+                          <span title={msg.status === "delivered" ? "Delivered to peer (acknowledged)" : "Sent to relay"}>
+                            {msg.status === "delivered" ? (
+                              <span className="text-wa-cyan flex items-center font-bold tracking-tighter">
+                                <Check className="w-3.5 h-3.5" />
+                                <Check className="w-3.5 h-3.5 -ml-2" />
+                              </span>
+                            ) : (
+                              <Check className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </span>
+                        ) : (
+                          <span title="Decrypted locally via AES-256-GCM">
+                            <Lock className="w-2.5 h-2.5 text-wa-teal" />
+                          </span>
+                        )}
+
+                        {/* Wire Inspect Icon on hover */}
+                        <button
+                          onClick={() => setWireModalMsg(msg)}
+                          title="Inspect raw cryptographic wire frame"
+                          className="opacity-0 group-hover:opacity-100 ml-1 text-wa-muted hover:text-white transition-opacity"
+                        >
+                          <Eye className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* File Transfer Streaming Progress Bar */}
+            {transferProgress && (
+              <div className="px-4 py-2 bg-wa-card border-t border-wa-subtle flex items-center justify-between text-xs font-mono animate-fade-in">
+                <div className="flex items-center gap-2 text-wa-teal">
+                  <UploadCloud className="w-4 h-4 animate-bounce" />
+                  <span className="font-semibold truncate max-w-[220px]">
+                    {transferProgress.direction === "sending" ? "Sending:" : "Receiving:"} {transferProgress.fileName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-32 bg-wa-dark rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="bg-wa-teal h-full transition-all duration-150"
+                      style={{ width: `${transferProgress.percentage}%` }}
+                    />
+                  </div>
+                  <span className="text-wa-muted">{transferProgress.percentage}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* Hidden Native File Input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileInputChange}
+              className="hidden"
+            />
+
+            {/* Bottom WhatsApp-Style Input Bar */}
+            <div className="p-3 bg-wa-card border-t border-wa-subtle flex items-center gap-2.5 shrink-0 z-10">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={handshakeState !== "complete"}
+                title="Attach Document or Image"
+                className="p-2.5 rounded-full hover:bg-wa-hover text-wa-muted hover:text-white transition-colors disabled:opacity-40"
+              >
+                <Paperclip className="w-5 h-5" />
+              </button>
+
+              <div className="flex-1 relative flex items-center bg-wa-incoming border border-wa-subtle rounded-full px-4 py-2 focus-within:border-wa-teal transition-colors">
+                <input
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={handshakeState !== "complete"}
+                  placeholder={
+                    handshakeState === "complete"
+                      ? "Type an encrypted message…"
+                      : "Establishing post-quantum channel…"
+                  }
+                  className="w-full bg-transparent text-sm text-wa-body placeholder-wa-muted focus:outline-none disabled:opacity-40"
+                />
+              </div>
+
+              <button
+                onClick={handleSend}
+                disabled={!inputText.trim() || handshakeState !== "complete"}
+                className="p-2.5 rounded-full bg-wa-teal hover:bg-[#00c298] text-white shadow-lg shadow-teal-950/40 transition-transform active:scale-95 disabled:opacity-40 disabled:hover:bg-wa-teal"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-          <div className="w-full bg-navy-950 rounded-full h-1.5 overflow-hidden">
-            <div
-              className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full transition-all duration-150"
-              style={{ width: `${transferProgress.percentage}%` }}
+        )}
+      </main>
+
+      {/* ===================================================================== */}
+      {/* MODAL: CREATE / JOIN ROOM                                             */}
+      {/* ===================================================================== */}
+      {newRoomModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-wa-card border border-wa-subtle rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-wa-subtle pb-3">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-wa-teal" />
+                <h3 className="font-bold text-white text-base">New Secure Conversation</h3>
+              </div>
+              <button onClick={() => setNewRoomModalOpen(false)} className="text-wa-muted hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Tabs: Create vs Join */}
+            <div className="grid grid-cols-2 gap-2 bg-wa-panel p-1 rounded-xl border border-wa-subtle">
+              <button
+                onClick={() => setModalTab("create")}
+                className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
+                  modalTab === "create" ? "bg-wa-card text-white shadow" : "text-wa-muted hover:text-white"
+                }`}
+              >
+                Create Room
+              </button>
+              <button
+                onClick={() => setModalTab("join")}
+                className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
+                  modalTab === "join" ? "bg-wa-card text-white shadow" : "text-wa-muted hover:text-white"
+                }`}
+              >
+                Join by Code
+              </button>
+            </div>
+
+            {modalTab === "create" ? (
+              <div className="space-y-4">
+                <p className="text-xs text-wa-muted leading-relaxed">
+                  Generates an ephemeral room on the relay server. Select your cryptographic cipher suite:
+                </p>
+
+                {/* Crypto Mode Selector */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div
+                    onClick={() => setMode("hybrid")}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      mode === "hybrid"
+                        ? "bg-wa-teal/15 border-wa-teal text-white shadow"
+                        : "bg-wa-panel border-wa-subtle text-wa-muted hover:border-wa-teal/50"
+                    }`}
+                  >
+                    <p className="font-bold text-xs flex items-center justify-between">
+                      <span>Hybrid PQ</span>
+                      {mode === "hybrid" && <Check className="w-3.5 h-3.5 text-wa-teal" />}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-1 font-mono">X25519 + ML-KEM-768</p>
+                    <span className="inline-block mt-2 text-[9px] px-1.5 py-0.2 rounded bg-wa-teal/20 text-wa-teal font-bold uppercase">
+                      Quantum Proof
+                    </span>
+                  </div>
+
+                  <div
+                    onClick={() => setMode("classical")}
+                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      mode === "classical"
+                        ? "bg-wa-teal/15 border-wa-teal text-white shadow"
+                        : "bg-wa-panel border-wa-subtle text-wa-muted hover:border-wa-teal/50"
+                    }`}
+                  >
+                    <p className="font-bold text-xs flex items-center justify-between">
+                      <span>Classical</span>
+                      {mode === "classical" && <Check className="w-3.5 h-3.5 text-wa-teal" />}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-1 font-mono">X25519 Curve</p>
+                    <span className="inline-block mt-2 text-[9px] px-1.5 py-0.2 rounded bg-white/5 text-slate-400 font-bold uppercase">
+                      Standard E2E
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleCreateRoom}
+                  disabled={isCreatingRoom}
+                  className="w-full py-3 rounded-xl bg-wa-teal hover:bg-[#00c298] text-white font-semibold text-sm shadow-lg shadow-teal-950/50 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                >
+                  {isCreatingRoom ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  <span>{isCreatingRoom ? "Creating Room…" : "Generate Room & Enter"}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-wa-muted leading-relaxed">
+                  Enter the 8-character cryptographic code provided by your peer or hub:
+                </p>
+                <input
+                  type="text"
+                  value={joinCodeInput}
+                  onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                  placeholder="Enter 8-digit code (e.g. A1B2C3D4)"
+                  maxLength={8}
+                  className="w-full px-4 py-2.5 rounded-xl bg-wa-panel border border-wa-subtle text-white font-mono text-center text-lg tracking-widest uppercase focus:outline-none focus:border-wa-teal"
+                />
+                <button
+                  onClick={() => handleJoinRoom()}
+                  disabled={isJoiningRoom || joinCodeInput.trim().length !== 8}
+                  className="w-full py-3 rounded-xl bg-wa-teal hover:bg-[#00c298] text-white font-semibold text-sm shadow-lg shadow-teal-950/50 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                >
+                  {isJoiningRoom ? <Loader className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                  <span>{isJoiningRoom ? "Connecting…" : "Join Secure Room"}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: IDENTITY PROFILE & QR EXPORT                                   */}
+      {/* ===================================================================== */}
+      {identityModalOpen && identity && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-wa-card border border-wa-subtle rounded-2xl max-w-sm w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setIdentityModalOpen(false)}
+              className="absolute top-4 right-4 text-wa-muted hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <IdentityCard
+              identity={identity}
+              onAliasChange={onAliasChange || (async () => {})}
+              onExport={onExportIdentity || (() => null)}
+              onDelete={onDestroyIdentity || (async () => {})}
             />
           </div>
         </div>
       )}
 
-      {/* Hidden File Picker Input */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileInputChange}
-        className="hidden"
-      />
-
-      {/* Message Input Area */}
-      {sendError && (
-        <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          {sendError}
-        </div>
-      )}
-      <div className="bg-navy-800 border border-white/10 rounded-xl p-3 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={handshakeState !== "complete"}
-          title="Encrypt & Transmit File / Image"
-          className="p-2 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
-        >
-          <Paperclip className="w-4 h-4" />
-        </button>
-        <input
-          value={inputText}
-          onChange={e => setInputText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={handshakeState === "complete" ? "Type an encrypted message or attach a file…" : "Waiting for secure channel…"}
-          disabled={handshakeState !== "complete"}
-          className="flex-1 bg-transparent text-white text-sm placeholder-slate-500 focus:outline-none disabled:opacity-40"
-        />
-        <button
-          onClick={handleSend}
-          disabled={!inputText.trim() || handshakeState !== "complete"}
-          className="p-2 rounded-lg bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/30 transition-colors disabled:opacity-40">
-          <Send className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Inspect Wire Modal */}
+      {/* ===================================================================== */}
+      {/* MODAL: WIRE FRAME INSPECTION                                          */}
+      {/* ===================================================================== */}
       {wireModalMsg && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-navy-900 border border-white/20 rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4 animate-fade-in font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-cyan-400" />
-                <h3 className="font-bold text-white text-sm">Relayed Wire Frame Inspection</h3>
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in font-mono text-xs">
+          <div className="bg-wa-card border border-wa-subtle rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-wa-subtle pb-3">
+              <div className="flex items-center gap-2 text-wa-teal font-bold text-sm font-sans">
+                <Shield className="w-4 h-4" />
+                <span>Captured Wire Frame (Zero-Knowledge Ciphertext)</span>
               </div>
-              <button onClick={() => setWireModalMsg(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setWireModalMsg(null)} className="text-wa-muted hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-slate-400 text-xs font-sans">
-              This is the exact JSON packet captured by the relay server. Notice that plaintext is completely absent — only opaque AES-256-GCM ciphertext and authentication metadata are exposed.
+            <p className="text-wa-muted text-xs font-sans">
+              Raw JSON packet received by the relay server. Plaintext is mathematically impossible to read without client-side private keys:
             </p>
 
-            {/* Wire Packet Dump */}
-            <div className="bg-navy-950 p-3 rounded-xl border border-white/10 overflow-x-auto text-[11px] space-y-1 text-slate-300">
-              <p className="text-cyan-400 font-bold">// Raw WebSocket JSON Envelope</p>
-              <pre className="text-slate-300 font-mono whitespace-pre-wrap break-all">
+            <div className="bg-wa-dark p-3.5 rounded-xl border border-wa-subtle overflow-x-auto text-[11px] text-slate-300">
+              <pre className="whitespace-pre-wrap break-all">
 {JSON.stringify({
   type: "encrypted_message",
   sessionId: wireModalMsg.sessionId,
@@ -938,39 +1087,28 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
   senderId: wireModalMsg.senderId,
   sequenceNumber: wireModalMsg.meta.sequenceNumber,
   algorithm: wireModalMsg.meta.algorithm,
-  nonce_b64: wireModalMsg.encryptedPayload?.nonce,
-  ciphertext_b64: wireModalMsg.encryptedPayload?.ciphertext,
+  nonce: wireModalMsg.encryptedPayload?.nonce,
+  ciphertext: wireModalMsg.encryptedPayload?.ciphertext,
   timestamp: wireModalMsg.meta.timestamp,
-  aad_bound: `session:${wireModalMsg.sessionId}|seq:${wireModalMsg.meta.sequenceNumber}`
 }, null, 2)}
               </pre>
             </div>
 
-            {/* Wire Security Notes */}
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 text-emerald-300 text-xs space-y-1 font-sans">
-              <p className="font-bold flex items-center gap-1.5">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Zero-Knowledge Relay Guarantee
-              </p>
-              <p className="text-[11px] text-slate-300">
-                The server cannot decrypt this message because it does not possess the derived AES key or post-quantum shared secret. Associated Authenticated Data (AAD) prevents packet replay or room injection.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-wa-subtle">
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(JSON.stringify(wireModalMsg.encryptedPayload, null, 2));
                   setCopiedWire(true);
                   setTimeout(() => setCopiedWire(false), 2000);
                 }}
-                className="px-3 py-1.5 rounded-lg border border-white/10 text-slate-300 hover:text-white flex items-center gap-1 text-xs"
+                className="px-3 py-1.5 rounded-lg border border-wa-subtle text-wa-muted hover:text-white text-xs flex items-center gap-1.5"
               >
-                {copiedWire ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                <span>{copiedWire ? "Copied Envelope" : "Copy JSON"}</span>
+                {copiedWire ? <Check className="w-3 h-3 text-wa-teal" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedWire ? "Copied" : "Copy Payload"}</span>
               </button>
               <button
                 onClick={() => setWireModalMsg(null)}
-                className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-semibold hover:bg-cyan-500/30"
+                className="px-4 py-1.5 rounded-lg bg-wa-teal text-white text-xs font-semibold hover:bg-[#00c298]"
               >
                 Done
               </button>
@@ -979,26 +1117,28 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
         </div>
       )}
 
-      {/* Clear History Confirmation Modal */}
+      {/* ===================================================================== */}
+      {/* MODAL: CRYPTOGRAPHIC ERASE HISTORY CONFIRMATION                       */}
+      {/* ===================================================================== */}
       {confirmClearOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-navy-900 border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-fade-in">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-wa-card border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3">
               <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400">
                 <Trash2 className="w-6 h-6" />
               </div>
               <div>
                 <h3 className="font-bold text-white text-base">Erase Room History?</h3>
-                <p className="text-xs text-slate-400">Room: <span className="font-mono text-cyan-400 font-semibold">{currentRoomCode}</span></p>
+                <p className="text-xs text-wa-muted font-mono">Room: {activeRoomId}</p>
               </div>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              This will perform a <strong>cryptographic erasure</strong> of all messages stored at rest in IndexedDB for this room. Because messages were never sent to or stored on any server, this action is permanent and cannot be undone.
+              This will cryptographically erase all decrypted messages stored in your local IndexedDB vault. Because no server archives exist, this operation is permanent and irreversible.
             </p>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 onClick={() => setConfirmClearOpen(false)}
-                className="px-4 py-2 rounded-lg border border-white/10 text-slate-300 hover:text-white text-xs"
+                className="px-4 py-2 rounded-lg border border-wa-subtle text-wa-muted hover:text-white text-xs"
               >
                 Cancel
               </button>
@@ -1006,6 +1146,7 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                 onClick={async () => {
                   await clearHistory();
                   setConfirmClearOpen(false);
+                  loadRecentRooms();
                 }}
                 className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-bold transition-colors"
               >

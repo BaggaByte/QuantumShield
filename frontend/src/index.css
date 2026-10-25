@@ -32,8 +32,29 @@
   .bg-navy-800 { background-color: #0d1526; }
   .bg-navy-700 { background-color: #111d35; }
 
+  /* WhatsApp Ultra-Modern 60-30-10 Dark Color System */
+  .bg-wa-dark { background-color: #080e14; }
+  .bg-wa-panel { background-color: #111c24; }
+  .bg-wa-card { background-color: #16232d; }
+  .bg-wa-hover { background-color: #1a2a36; }
+  .bg-wa-outgoing { background-color: #005c4b; }
+  .bg-wa-incoming { background-color: #202c33; }
+  .border-wa-subtle { border-color: rgba(255, 255, 255, 0.07); }
+  .text-wa-teal { color: #00a884; }
+  .text-wa-cyan { color: #53bdeb; }
+  .text-wa-muted { color: #8696a0; }
+  .text-wa-body { color: #e9edef; }
+
+  /* WhatsApp Quantum Doodle Vector Pattern Wallpaper */
+  .qs-doodle-bg {
+    background-color: #080e14;
+    background-image: radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.03) 0%, transparent 60%),
+      url("data:image/svg+xml,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%2306b6d4' fill-opacity='0.032' fill-rule='evenodd'%3E%3Cpath d='M20 20h8v8h-8zM60 10l6 10H54zM90 25a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM15 75l7 12H8zM70 70h10v10H70zM100 85a6 6 0 1 1-12 0 6 6 0 0 1 12 0zM40 50a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'/%3E%3Cpath d='M30 90c0 5.523-4.477 10-10 10s-10-4.477-10-10 4.477-10 10-10 10 4.477 10 10zm60-30c0 4.418-3.582 8-8 8s-8-3.582-8-8 3.582-8 8-8 8 3.582 8 8zm-45 5a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm65-40a2 2 0 1 1-4 0 2 2 0 0 1 4 0z'/%3E%3C/g%3E%3C/svg%3E");
+    background-repeat: repeat;
+  }
+
   .animate-fade-in {
-    animation: fadeIn 0.3s ease-out;
+    animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .animate-spin-slow {
@@ -45,7 +66,8 @@
   }
 
   @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(8px); }
+    from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
   }
 }
+

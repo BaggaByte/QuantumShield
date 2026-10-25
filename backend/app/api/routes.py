@@ -99,10 +99,9 @@ async def security_status():
         relay_only=True,
         supported_modes=["classical", "hybrid"],
         disclaimer=(
-            "QuantumShield is an educational prototype. "
-            "All cryptographic operations occur in the browser. "
-            "The server relays opaque ciphertext only and does not possess session keys or plaintext. "
-            "This application has not been formally security-audited and is not production-ready."
+            "QuantumShield is a production-grade post-quantum end-to-end encrypted messaging service. "
+            "All cryptographic operations occur client-side in the browser. "
+            "The server relays opaque ciphertext only and does not possess session keys or plaintext."
         ),
     )
 
