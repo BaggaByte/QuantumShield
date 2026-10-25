@@ -53,6 +53,25 @@ export interface MessageMeta {
 
 export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered';
 
+export interface FileAttachment {
+  fileId: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  blobUrl?: string;
+  dataUrl?: string;
+  isImage: boolean;
+}
+
+export interface FileTransferProgress {
+  fileId: string;
+  fileName: string;
+  totalChunks: number;
+  transferredChunks: number;
+  percentage: number;
+  direction: 'sending' | 'receiving';
+}
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
@@ -67,6 +86,7 @@ export interface ChatMessage {
   status?: MessageDeliveryStatus;
   senderAlias?: string;
   senderFingerprint?: string;
+  attachment?: FileAttachment;
 }
 
 export interface EncryptedStoredRecord {

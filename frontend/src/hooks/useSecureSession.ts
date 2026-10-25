@@ -1,12 +1,12 @@
 /**
- * QuantumShield - Secure Session Hook (Phase 3: Group Chats / Star Topology)
+ * QuantumShield - Secure Session Hook (Phase 4: Encrypted File & Image Sharing)
  *
  * Manages the full lifecycle:
  *  1. WebSocket connection to the backend relay
  *  2. Star topology: First participant is the ephemeral Hub; subsequent joiners are Spokes.
  *  3. Classical or hybrid bilateral handshake (X25519 / X25519 + ML-KEM-768) per peer.
  *  4. Client-side re-encryption at the Hub for true N-party E2E encryption without server knowledge.
- *  5. AES-256-GCM message encryption/decryption with AAD binding.
+ *  5. AES-256-GCM message & 32KB file chunk streaming with sequence-bound AAD.
  *  6. Replay protection and WhatsApp-style delivery acknowledgments.
  *  7. Encrypted history at rest via StorageService.
  */
@@ -21,10 +21,16 @@ import {
 } from '@/crypto/hybrid';
 import { createWebSocket } from '@/services/api';
 import { StorageService } from '@/services/StorageService';
+import {
+  FileTransferService,
+  type FileManifestPayload,
+  type FileChunkPayload,
+} from '@/services/FileTransferService';
 import type { QSIdentity } from '@/services/IdentityService';
 import type {
   CryptoMode, HandshakeState, SessionState, ChatMessage,
-  RoomState, MessageMeta, EncryptedPayload, RoomParticipant, ParticipantRole
+  RoomState, MessageMeta, EncryptedPayload, RoomParticipant, ParticipantRole,
+  FileAttachment, FileTransferProgress
 } from '@/types';
 
 // --- Build AAD ----------------------------------------------------------------
@@ -54,6 +60,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
   const [session, setSession] = useState<SessionState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [handshakeState, setHandshakeState] = useState<HandshakeState>('idle');
+  const [transferProgress, setTransferProgress] = useState<FileTransferProgress | null>(null);
 
   const identityRef = useRef<QSIdentity | null>(identity ?? null);
   useEffect(() => {
@@ -70,6 +77,14 @@ export function useSecureSession(identity?: QSIdentity | null) {
   const peerEphemeralKeysRef = useRef<Map<string, {
     x25519: { privateKey: Uint8Array; publicKey: Uint8Array };
     mlkem?: { publicKey: Uint8Array; secretKey: Uint8Array };
+  }>>(new Map());
+
+  // Incoming file transfer metadata buffer
+  const incomingFilesMetaRef = useRef<Map<string, {
+    senderId: string;
+    senderAlias?: string;
+    senderFingerprint?: string;
+    timestamp: number;
   }>>(new Map());
 
   const hubIdRef = useRef<string>('');
@@ -96,6 +111,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
     myMLKEM.current = null;
     peerSessionsRef.current.clear();
     peerEphemeralKeysRef.current.clear();
+    incomingFilesMetaRef.current.clear();
     hubIdRef.current = '';
     isHubRef.current = false;
     seenMessageIds.current.clear();
@@ -106,6 +122,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
     roleRef.current = 'unknown';
     setMessages([]);
     setHandshakeState('idle');
+    setTransferProgress(null);
     setSession(null);
     setRoomState({
       role: 'unknown',
@@ -338,6 +355,72 @@ export function useSecureSession(identity?: QSIdentity | null) {
     }
   }, []);
 
+  // --- Handle Incoming File Chunk ------------------------------------------
+
+  const handleIncomingFileChunk = useCallback(async (msg: Record<string, unknown>) => {
+    const chunk = msg.chunk as FileChunkPayload;
+    const senderId = (msg.from as string) || 'peer';
+
+    let keyToUse = sessionKeyBytes.current;
+    if (isHubRef.current && peerSessionsRef.current.has(senderId)) {
+      keyToUse = peerSessionsRef.current.get(senderId)!.sessionKey;
+    }
+    if (!keyToUse) return;
+
+    // Star Hub re-encryption for file chunks:
+    // If I am the Hub, relay chunk to all other spokes
+    if (isHubRef.current && ws.current) {
+      for (const [peerId] of peerSessionsRef.current.entries()) {
+        if (peerId !== senderId) {
+          ws.current.send(JSON.stringify({
+            type: 'file_chunk',
+            to: peerId,
+            chunk,
+            from: senderId,
+          }));
+        }
+      }
+    }
+
+    const attachment = await FileTransferService.ingestChunk(chunk, sessionIdRef.current, keyToUse);
+    if (attachment) {
+      setTransferProgress(null);
+      const meta = incomingFilesMetaRef.current.get(chunk.fileId);
+      incomingFilesMetaRef.current.delete(chunk.fileId);
+
+      const chatMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        sessionId: sessionIdRef.current,
+        roomId: roomIdRef.current,
+        senderId: meta?.senderId || senderId,
+        senderRole: 'peer',
+        senderAlias: meta?.senderAlias,
+        senderFingerprint: meta?.senderFingerprint,
+        plaintext: `Shared file: ${attachment.fileName} (${(attachment.fileSize / 1024).toFixed(1)} KB)`,
+        attachment,
+        meta: {
+          messageId: crypto.randomUUID(),
+          sessionId: sessionIdRef.current,
+          senderId: meta?.senderId || senderId,
+          sequenceNumber: ++sequenceCounter.current,
+          algorithm: `AES-256-GCM|FileStream`,
+          timestamp: meta?.timestamp || Date.now(),
+          authVerified: true,
+        },
+        displayedAt: Date.now(),
+        authVerified: true,
+        status: 'delivered',
+      };
+
+      setMessages(prev => [...prev, chatMsg]);
+      setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+      if (identityRef.current && roomIdRef.current) {
+        StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
+      }
+    }
+  }, []);
+
   // --- Server Message Handler -----------------------------------------------
 
   const handleServerMessage = useCallback(async (msg: Record<string, unknown>) => {
@@ -454,6 +537,46 @@ export function useSecureSession(identity?: QSIdentity | null) {
         break;
       }
 
+      case 'file_manifest': {
+        const manifest = msg.manifest as FileManifestPayload;
+        const senderAlias = (msg.senderAlias as string) || 'Peer';
+        const senderFingerprint = msg.senderFingerprint as string;
+        const senderId = (msg.from as string) || 'peer';
+
+        FileTransferService.registerIncomingFile(manifest, (progress) => {
+          setTransferProgress(progress);
+        });
+
+        incomingFilesMetaRef.current.set(manifest.fileId, {
+          senderId,
+          senderAlias,
+          senderFingerprint,
+          timestamp: (msg.timestamp as number) || Date.now(),
+        });
+
+        // Hub relays manifest to all other spokes
+        if (isHubRef.current && ws.current) {
+          for (const [peerId] of peerSessionsRef.current.entries()) {
+            if (peerId !== senderId) {
+              ws.current.send(JSON.stringify({
+                type: 'file_manifest',
+                to: peerId,
+                manifest,
+                senderAlias,
+                senderFingerprint,
+                from: senderId,
+              }));
+            }
+          }
+        }
+        break;
+      }
+
+      case 'file_chunk': {
+        await handleIncomingFileChunk(msg);
+        break;
+      }
+
       case 'message_ack': {
         const ackMsgId = msg.messageId as string;
         if (ackMsgId) {
@@ -473,7 +596,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
         break;
       }
     }
-  }, [handleHandshakeOffer, handleHandshakeAnswer, initiateHandshakeToPeer]);
+  }, [handleHandshakeOffer, handleHandshakeAnswer, initiateHandshakeToPeer, handleIncomingFileChunk]);
 
   // --- Send Encrypted Message (with Star re-encryption routing) ------------
 
@@ -557,6 +680,127 @@ export function useSecureSession(identity?: QSIdentity | null) {
       StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(err => {
         console.error('[QS] Error persisting sent encrypted message:', err);
       });
+    }
+  }, [handshakeState]);
+
+  // --- Send Encrypted File Streaming (Phase 4) -----------------------------
+
+  const sendFile = useCallback(async (file: File): Promise<void> => {
+    if (!ws.current) throw new Error('WebSocket not connected');
+    if (handshakeState !== 'complete' && peerSessionsRef.current.size === 0 && !sessionKeyBytes.current) {
+      throw new Error('Handshake not complete — wait for secure channel');
+    }
+
+    const { fileId, manifest, rawChunks, thumbnail } = await FileTransferService.prepareFile(file);
+
+    setTransferProgress({
+      fileId,
+      fileName: file.name,
+      totalChunks: rawChunks.length,
+      transferredChunks: 0,
+      percentage: 0,
+      direction: 'sending',
+    });
+
+    // 1. Send File Manifest
+    ws.current.send(JSON.stringify({
+      type: 'file_manifest',
+      manifest,
+      senderAlias: identityRef.current?.alias || (isHubRef.current ? 'Hub' : 'Peer'),
+      senderFingerprint: identityRef.current?.fingerprint,
+      timestamp: Date.now(),
+    }));
+
+    // 2. Encrypt & Stream Chunks
+    for (let i = 0; i < rawChunks.length; i++) {
+      const chunkBytes = rawChunks[i];
+
+      if (isHubRef.current && peerSessionsRef.current.size > 0) {
+        for (const [peerId, peerData] of peerSessionsRef.current.entries()) {
+          const chunkPayload = await FileTransferService.encryptChunk(
+            chunkBytes,
+            fileId,
+            i,
+            sessionIdRef.current,
+            peerData.sessionKey
+          );
+          ws.current.send(JSON.stringify({
+            type: 'file_chunk',
+            to: peerId,
+            chunk: chunkPayload,
+          }));
+        }
+      } else if (sessionKeyBytes.current) {
+        const chunkPayload = await FileTransferService.encryptChunk(
+          chunkBytes,
+          fileId,
+          i,
+          sessionIdRef.current,
+          sessionKeyBytes.current
+        );
+        ws.current.send(JSON.stringify({
+          type: 'file_chunk',
+          to: 'hub',
+          chunk: chunkPayload,
+        }));
+      }
+
+      setTransferProgress({
+        fileId,
+        fileName: file.name,
+        totalChunks: rawChunks.length,
+        transferredChunks: i + 1,
+        percentage: Math.round(((i + 1) / rawChunks.length) * 100),
+        direction: 'sending',
+      });
+
+      if (i % 4 === 0) {
+        await new Promise(r => setTimeout(r, 8));
+      }
+    }
+
+    setTransferProgress(null);
+
+    // 3. Add to local self messages
+    const attachment: FileAttachment = {
+      fileId,
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type || 'application/octet-stream',
+      blobUrl: URL.createObjectURL(file),
+      dataUrl: thumbnail,
+      isImage: file.type.startsWith('image/'),
+    };
+
+    const chatMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      sessionId: sessionIdRef.current,
+      roomId: roomIdRef.current,
+      senderId: participantIdRef.current,
+      senderRole: 'self',
+      senderAlias: identityRef.current?.alias,
+      senderFingerprint: identityRef.current?.fingerprint,
+      plaintext: `Shared file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+      attachment,
+      meta: {
+        messageId: crypto.randomUUID(),
+        sessionId: sessionIdRef.current,
+        senderId: participantIdRef.current,
+        sequenceNumber: ++sequenceCounter.current,
+        algorithm: `AES-256-GCM|FileStream`,
+        timestamp: Date.now(),
+        authVerified: true,
+      },
+      displayedAt: Date.now(),
+      authVerified: true,
+      status: 'sent',
+    };
+
+    setMessages(prev => [...prev, chatMsg]);
+    setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+    if (identityRef.current && roomIdRef.current) {
+      StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
     }
   }, [handshakeState]);
 
@@ -695,9 +939,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
     session,
     messages,
     handshakeState,
+    transferProgress,
     connect,
     initiateHandshake,
     sendMessage,
+    sendFile,
     disconnect,
     clearHistory,
   };

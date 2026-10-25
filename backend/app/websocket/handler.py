@@ -11,7 +11,7 @@ from app.rooms.manager import room_manager
 
 logger = logging.getLogger("quantumshield.websocket")
 
-MAX_MESSAGE_BYTES = 65536
+MAX_MESSAGE_BYTES = 262144  # 256KB to support encrypted file chunks
 
 async def websocket_room_handler(websocket: WebSocket, room_id: str):
     await websocket.accept()
@@ -86,9 +86,9 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                             "participants": roster,
                         })
 
-            # Relay handshake, encrypted messages, and delivery acknowledgments
+            # Relay handshake, encrypted messages, file transfers, and delivery acknowledgments
             elif msg_type in ("handshake_offer", "handshake_answer", "handshake_complete",
-                              "encrypted_message", "message_ack", "ping"):
+                              "encrypted_message", "message_ack", "file_manifest", "file_chunk", "ping"):
                 current_room = room_manager.get_room(room_id)
                 if current_room:
                     # Tag with sender id and timestamp for recipient verification
