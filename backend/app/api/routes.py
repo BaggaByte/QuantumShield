@@ -11,12 +11,25 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.rooms.manager import room_manager
 from app.config import settings
+from app.push import push_manager
 
 logger = logging.getLogger("quantumshield.api")
 router = APIRouter()
 _start_time = time.time()
 
 # --- Models ------------------------------------------------------------------
+
+class VapidKeyResponse(BaseModel):
+    public_key: str
+
+class PushSubscribeRequest(BaseModel):
+    room_id: str
+    participant_id: str
+    subscription: dict
+
+class PushUnsubscribeRequest(BaseModel):
+    room_id: str
+    participant_id: str
 
 class RoomResponse(BaseModel):
     room_id: str
@@ -114,3 +127,25 @@ async def system_info():
         "backend": "FastAPI + Uvicorn",
         "crypto_note": "All E2E crypto performed client-side in browser (Web Crypto API + @noble libraries)",
     }
+
+# --- Zero-Knowledge Push Notification Endpoints -----------------------------
+
+@router.get("/api/push/vapid-public-key", response_model=VapidKeyResponse, tags=["push"])
+async def get_vapid_public_key():
+    """Returns the RFC 8292 VAPID public key for Web Push subscription."""
+    return VapidKeyResponse(public_key=push_manager.public_key)
+
+@router.post("/api/push/subscribe", tags=["push"])
+async def subscribe_push(req: PushSubscribeRequest):
+    """Registers a participant's Web Push subscription for zero-knowledge wake-up signals."""
+    success = push_manager.subscribe(req.room_id, req.participant_id, req.subscription)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid push subscription payload")
+    return {"status": "subscribed", "room_id": req.room_id}
+
+@router.post("/api/push/unsubscribe", tags=["push"])
+async def unsubscribe_push(req: PushUnsubscribeRequest):
+    """Removes a participant's Web Push subscription."""
+    push_manager.unsubscribe(req.room_id, req.participant_id)
+    return {"status": "unsubscribed"}
+

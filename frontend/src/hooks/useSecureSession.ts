@@ -21,6 +21,7 @@ import {
 } from '@/crypto/hybrid';
 import { createWebSocket } from '@/services/api';
 import { StorageService } from '@/services/StorageService';
+import { pushService } from '@/services/PushNotificationService';
 import {
   FileTransferService,
   type FileManifestPayload,
@@ -414,6 +415,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
       setMessages(prev => [...prev, chatMsg]);
       setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+      pushService.showLocalBackgroundNotification(
+        'QuantumShield',
+        `Encrypted file received: ${attachment.fileName}`
+      );
 
       if (identityRef.current && roomIdRef.current) {
         StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
@@ -893,6 +899,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
     setMessages(prev => [...prev, chatMsg]);
     setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+    pushService.showLocalBackgroundNotification(
+      'QuantumShield',
+      'New encrypted message received'
+    );
 
     if (identityRef.current && roomIdRef.current) {
       StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(err => {

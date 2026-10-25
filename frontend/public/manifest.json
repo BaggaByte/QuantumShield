@@ -1,0 +1,35 @@
+{
+  "name": "QuantumShield - Post-Quantum Messenger",
+  "short_name": "QuantumShield",
+  "description": "Zero-knowledge end-to-end post-quantum encrypted messaging, file streaming, and cryptographic identity.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050814",
+  "theme_color": "#06b6d4",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": [
+    "security",
+    "social",
+    "productivity"
+  ]
+}

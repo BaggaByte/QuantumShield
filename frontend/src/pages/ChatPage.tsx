@@ -3,10 +3,12 @@ import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
   CheckCircle, XCircle, AlertCircle, Key,
   Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint,
-  Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud
+  Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud,
+  Bell, BellOff, Smartphone
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
+import { pushService } from "@/services/PushNotificationService";
 import { useSecureSession } from "@/hooks/useSecureSession";
 import type { CryptoMode, ChatMessage, StoredRoomSummary } from "@/types";
 import type { QSIdentity } from "@/services/IdentityService";
@@ -38,6 +40,9 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
     revealedText?: string;
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [pushStatus, setPushStatus] = useState<"idle" | "loading" | "active" | "denied">("idle");
+  const [canInstall, setCanInstall] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +68,59 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
       loadRecentRooms();
     }
   }, [view]);
+
+  useEffect(() => {
+    setIsStandalone(pushService.isStandalone());
+    setCanInstall(pushService.canInstallPwa());
+
+    const perm = pushService.getPermission();
+    if (perm === "granted") {
+      setPushStatus("active");
+    } else if (perm === "denied") {
+      setPushStatus("denied");
+    }
+
+    const onCanInstall = () => setCanInstall(true);
+    const onInstalled = () => {
+      setCanInstall(false);
+      setIsStandalone(true);
+    };
+
+    window.addEventListener("qs-can-install-pwa", onCanInstall);
+    window.addEventListener("qs-pwa-installed", onInstalled);
+
+    return () => {
+      window.removeEventListener("qs-can-install-pwa", onCanInstall);
+      window.removeEventListener("qs-pwa-installed", onInstalled);
+    };
+  }, []);
+
+  const handleTogglePush = async () => {
+    if (pushStatus === "denied") {
+      alert("Push notifications are currently blocked in browser permissions. Please allow notifications for QuantumShield in your browser settings.");
+      return;
+    }
+    setPushStatus("loading");
+    if (pushStatus === "active") {
+      await pushService.unsubscribeFromRoom(currentRoomCode, roomState.participantId);
+      setPushStatus("idle");
+    } else {
+      const success = await pushService.subscribeToRoom(currentRoomCode, roomState.participantId);
+      if (success) {
+        setPushStatus("active");
+      } else {
+        setPushStatus(pushService.getPermission() === "denied" ? "denied" : "idle");
+      }
+    }
+  };
+
+  const handleInstallPwa = async () => {
+    const installed = await pushService.promptInstallPwa();
+    if (installed) {
+      setCanInstall(false);
+    }
+  };
+
 
   useEffect(() => {
     if (session && onSessionChange) {
@@ -366,6 +424,37 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
             </div>
           </div>
         )}
+
+        {/* PWA & Zero-Knowledge Web Push Card (Phase 5) */}
+        <div className="bg-navy-800/80 border border-white/10 rounded-xl p-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white flex items-center gap-1.5">
+                <span>Progressive Web App</span>
+                {isStandalone && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-normal">
+                    App Mode Active
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-slate-400">
+                Install as a standalone app with zero-knowledge push alerts.
+              </p>
+            </div>
+          </div>
+          {canInstall && (
+            <button
+              onClick={handleInstallPwa}
+              className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Install</span>
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -416,11 +505,48 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-xs font-mono text-cyan-300" title="All messages are stored client-side using AES-256-GCM IndexedDB">
               <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
               <span>AES-256 Vault</span>
             </div>
+            {canInstall && (
+              <button
+                onClick={handleInstallPwa}
+                className="px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                title="Install QuantumShield as Standalone Progressive Web App"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">Install PWA</span>
+              </button>
+            )}
+            <button
+              onClick={handleTogglePush}
+              disabled={pushStatus === 'loading'}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                pushStatus === 'active'
+                  ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                  : pushStatus === 'denied'
+                  ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
+                  : 'bg-white/5 text-slate-300 hover:text-white border border-white/10'
+              }`}
+              title={
+                pushStatus === 'active'
+                  ? 'Zero-Knowledge Push Notifications Active (Click to unsubscribe)'
+                  : pushStatus === 'denied'
+                  ? 'Push notifications blocked by browser permission'
+                  : 'Enable Zero-Knowledge Push Notifications'
+              }
+            >
+              {pushStatus === 'loading' ? (
+                <Loader className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+              ) : pushStatus === 'active' ? (
+                <Bell className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <BellOff className="w-3.5 h-3.5 text-slate-400" />
+              )}
+              <span className="hidden sm:inline">{pushStatus === 'active' ? 'Push Active' : pushStatus === 'denied' ? 'Push Blocked' : 'Enable Push'}</span>
+            </button>
             {session?.sessionKeyFingerprint && (
               <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
                 <Shield className="w-3.5 h-3.5 text-emerald-400" />

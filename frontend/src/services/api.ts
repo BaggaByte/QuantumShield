@@ -79,6 +79,19 @@ export const api = {
   securityStatus: () => fetchJSON<SecurityStatus>('api/security/status'),
   benchmarkConfig: () => fetchJSON<BenchmarkConfig>('api/benchmarks/config'),
   systemLogs: (limit = 150) => fetchJSON<LogsResponse>(`api/system/logs?limit=${limit}`),
+  getVapidPublicKey: () => fetchJSON<{ public_key: string }>('api/push/vapid-public-key'),
+  subscribePush: (roomId: string, participantId: string, subscription: unknown) =>
+    fetchJSON<{ status: string }>('api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_id: roomId, participant_id: participantId, subscription }),
+    }),
+  unsubscribePush: (roomId: string, participantId: string) =>
+    fetchJSON<{ status: string }>('api/push/unsubscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_id: roomId, participant_id: participantId }),
+    }),
 };
 
 export function createWebSocket(roomId: string): WebSocket {

@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
-  Shield, MessageSquare, FlaskConical, Zap, CheckSquare, Menu, X
+  Shield, MessageSquare, FlaskConical, Zap, CheckSquare, Menu, X, Smartphone
 } from "lucide-react";
 import OverviewPage from "@/pages/OverviewPage";
 import ChatPage from "@/pages/ChatPage";
@@ -11,6 +11,7 @@ import TerminalDrawer from "@/components/TerminalDrawer";
 import IdentitySetup from "@/components/IdentitySetup";
 import IdentityCard from "@/components/IdentityCard";
 import { useIdentity } from "@/hooks/useIdentity";
+import { pushService } from "@/services/PushNotificationService";
 
 type Page = "overview" | "chat" | "explorer" | "benchmark" | "tests";
 
@@ -28,7 +29,22 @@ export default function App() {
   const [globalSession, setGlobalSession] = useState<{
     mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number;
   } | null>(null);
+  const [canInstall, setCanInstall] = useState(false);
   const { identity, status, create, setAlias, exportJSON, destroy } = useIdentity();
+
+  useEffect(() => {
+    setCanInstall(pushService.canInstallPwa());
+    const onCanInstall = () => setCanInstall(true);
+    const onInstalled = () => setCanInstall(false);
+
+    window.addEventListener("qs-can-install-pwa", onCanInstall);
+    window.addEventListener("qs-pwa-installed", onInstalled);
+
+    return () => {
+      window.removeEventListener("qs-can-install-pwa", onCanInstall);
+      window.removeEventListener("qs-pwa-installed", onInstalled);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-navy-950 text-white flex">
@@ -89,9 +105,22 @@ export default function App() {
           />
         )}
 
+        {/* PWA Install Button */}
+        {canInstall && (
+          <div className="px-4 pb-3">
+            <button
+              onClick={() => pushService.promptInstallPwa()}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-500/20 to-indigo-500/20 hover:from-cyan-500/30 hover:to-indigo-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition-all shadow-lg shadow-cyan-950/50"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Install PWA App</span>
+            </button>
+          </div>
+        )}
+
         {/* Version */}
         <div className="px-4 pb-4">
-          <p className="text-[10px] text-slate-700">QuantumShield v2.0 · Phase 1</p>
+          <p className="text-[10px] text-slate-600">QuantumShield v2.0 · Post-Quantum PWA</p>
         </div>
       </aside>
 

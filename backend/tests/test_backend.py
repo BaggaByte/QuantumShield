@@ -100,22 +100,22 @@ def test_room_isolation():
     # Participant in room A cannot access room B's data
     assert rm.get_room(room_a.room_id) is not rm.get_room(room_b.room_id)
 
-def test_room_full_after_two_join():
+def test_room_full_after_max_participants_join():
     rm = RoomManager()
     room = rm.create_room()
-    ws1, ws2 = AsyncMock(), AsyncMock()
-    rm.join_room(room.room_id, ws1)
-    rm.join_room(room.room_id, ws2)
+    ws_list = [AsyncMock() for _ in range(room.max_participants)]
+    for ws in ws_list:
+        rm.join_room(room.room_id, ws)
     assert room.is_full()
 
 def test_join_full_room_raises():
     rm = RoomManager()
     room = rm.create_room()
-    ws1, ws2, ws3 = AsyncMock(), AsyncMock(), AsyncMock()
-    rm.join_room(room.room_id, ws1)
-    rm.join_room(room.room_id, ws2)
+    ws_list = [AsyncMock() for _ in range(room.max_participants)]
+    for ws in ws_list:
+        rm.join_room(room.room_id, ws)
     with pytest.raises(ValueError, match="full"):
-        rm.join_room(room.room_id, ws3)
+        rm.join_room(room.room_id, AsyncMock())
 
 def test_leave_room_cleanup():
     rm = RoomManager()
@@ -133,8 +133,8 @@ def test_participant_roles():
     ws1, ws2 = AsyncMock(), AsyncMock()
     _, p1 = rm.join_room(room.room_id, ws1)
     _, p2 = rm.join_room(room.room_id, ws2)
-    assert p1.role == "initiator"
-    assert p2.role == "responder"
+    assert p1.role == "hub"
+    assert p2.role == "spoke"
 
 # --- Security Status ---------------------------------------------------------
 
@@ -175,3 +175,39 @@ def test_server_does_not_store_keys():
     for term in forbidden_terms:
         assert term not in room_src, f"Forbidden term '{term}' found in room manager"
         assert term not in ws_src, f"Forbidden term '{term}' found in websocket handler"
+
+# --- Zero-Knowledge Push Notification Tests ----------------------------------
+
+def test_vapid_public_key_endpoint(client):
+    r = client.get("/api/push/vapid-public-key")
+    assert r.status_code == 200
+    body = r.json()
+    assert "public_key" in body
+    assert len(body["public_key"]) >= 80
+
+def test_push_subscribe_and_unsubscribe(client):
+    # Register subscription
+    sub_payload = {
+        "room_id": "TESTROOM",
+        "participant_id": "test-pid-1",
+        "subscription": {
+            "endpoint": "https://fcm.googleapis.com/fcm/send/test-sub-token",
+            "keys": {
+                "p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4Ywf_00qv80AbkkH350dB8-Aa28a0SJ_SMQgh9nWfVVRF5iU5GQW0Pec",
+                "auth": "tBHItJI5svbpez7KI4CCXg",
+            },
+        },
+    }
+    r = client.post("/api/push/subscribe", json=sub_payload)
+    assert r.status_code == 200
+    assert r.json()["status"] == "subscribed"
+
+    # Unsubscribe
+    unsub_payload = {
+        "room_id": "TESTROOM",
+        "participant_id": "test-pid-1",
+    }
+    r2 = client.post("/api/push/unsubscribe", json=unsub_payload)
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "unsubscribed"
+

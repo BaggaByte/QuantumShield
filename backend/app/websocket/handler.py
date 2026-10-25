@@ -8,6 +8,7 @@ import logging
 import time
 from fastapi import WebSocket, WebSocketDisconnect
 from app.rooms.manager import room_manager
+from app.push import push_manager
 
 logger = logging.getLogger("quantumshield.websocket")
 
@@ -110,6 +111,12 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                         # Star broadcast to all other participants
                         for peer in current_room.get_other_participants(participant.participant_id):
                             await peer.websocket.send_json(msg)
+
+                    # Trigger zero-knowledge wake-up push notification for subscribers
+                    if msg_type in ("encrypted_message", "file_manifest"):
+                        await push_manager.notify_room_background(
+                            room_id, exclude_participant_id=participant.participant_id
+                        )
 
             elif msg_type == "set_crypto_mode":
                 mode = msg.get("mode")
