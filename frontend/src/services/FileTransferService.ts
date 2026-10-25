@@ -12,6 +12,8 @@ import { encryptMessage, decryptMessage, bytesToBase64, base64ToBytes } from '@/
 import type { FileAttachment, FileTransferProgress } from '@/types';
 
 export const CHUNK_SIZE = 32768; // 32 KB
+export const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB cap to prevent buffer exhaustion attacks
+export const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 export interface FileManifestPayload {
   fileId: string;
@@ -20,7 +22,13 @@ export interface FileManifestPayload {
   fileType: string;
   totalChunks: number;
   sha256: string;
-  thumbnail?: string; // low-res base64 data URL for instant image preview
+  thumbnail?: string; // encrypted along with the manifest
+}
+
+export interface EncryptedManifestEnvelope {
+  fileId: string;
+  ciphertext: string;
+  nonce: string;
 }
 
 export interface FileChunkPayload {
@@ -50,7 +58,7 @@ async function computeSHA256(data: Uint8Array): Promise<string> {
  * Generate a small client-side image thumbnail (< 15KB) for instant preview
  */
 export async function generateThumbnail(file: File): Promise<string | undefined> {
-  if (!file.type.startsWith('image/')) return undefined;
+  if (!ALLOWED_IMAGE_TYPES.has(file.type.toLowerCase())) return undefined;
 
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -104,6 +112,7 @@ const pendingTransfers = new Map<string, PendingFileTransfer>();
 export const FileTransferService = {
   /**
    * Prepares a file for encrypted chunk streaming.
+   * Enforces 15MB size limit and restricts MIME types to safe raster images or octet-stream.
    */
   async prepareFile(file: File): Promise<{
     fileId: string;
@@ -111,11 +120,20 @@ export const FileTransferService = {
     rawChunks: Uint8Array[];
     thumbnail?: string;
   }> {
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds maximum limit of 15MB`);
+    }
+
     const fileId = crypto.randomUUID();
     const arrayBuffer = await file.arrayBuffer();
     const fullBytes = new Uint8Array(arrayBuffer);
     const sha256 = await computeSHA256(fullBytes);
     const thumbnail = await generateThumbnail(file);
+
+    // Sanitize MIME type: allow only verified raster images, force application/octet-stream for everything else
+    const safeMimeType = ALLOWED_IMAGE_TYPES.has(file.type.toLowerCase())
+      ? file.type.toLowerCase()
+      : 'application/octet-stream';
 
     const rawChunks: Uint8Array[] = [];
     for (let offset = 0; offset < fullBytes.length; offset += CHUNK_SIZE) {
@@ -124,15 +142,54 @@ export const FileTransferService = {
 
     const manifest: FileManifestPayload = {
       fileId,
-      fileName: file.name,
+      fileName: file.name.replace(/[^\w.\- ]/g, '_'), // Sanitize file name
       fileSize: file.size,
-      fileType: file.type || 'application/octet-stream',
+      fileType: safeMimeType,
       totalChunks: rawChunks.length,
       sha256,
       thumbnail,
     };
 
     return { fileId, manifest, rawChunks, thumbnail };
+  },
+
+  /**
+   * Encrypts a manifest payload with AES-256-GCM.
+   */
+  async encryptManifest(
+    manifest: FileManifestPayload,
+    sessionKey: Uint8Array,
+    sessionId: string
+  ): Promise<EncryptedManifestEnvelope> {
+    const aad = new TextEncoder().encode(JSON.stringify({ fileId: manifest.fileId, sessionId, type: 'manifest' }));
+    const plaintext = JSON.stringify(manifest);
+    const { ciphertext, nonce } = await encryptMessage(plaintext, sessionKey, aad);
+    return {
+      fileId: manifest.fileId,
+      ciphertext,
+      nonce,
+    };
+  },
+
+  /**
+   * Decrypts an encrypted manifest envelope with AES-256-GCM.
+   */
+  async decryptManifest(
+    envelope: EncryptedManifestEnvelope,
+    sessionKey: Uint8Array,
+    sessionId: string
+  ): Promise<FileManifestPayload> {
+    const aad = new TextEncoder().encode(JSON.stringify({ fileId: envelope.fileId, sessionId, type: 'manifest' }));
+    const { plaintext } = await decryptMessage(envelope.ciphertext, sessionKey, aad);
+    const manifest = JSON.parse(plaintext) as FileManifestPayload;
+
+    if (manifest.fileSize > MAX_FILE_SIZE) {
+      throw new Error('Peer manifest specifies file size exceeding 15MB limit');
+    }
+    if (!ALLOWED_IMAGE_TYPES.has(manifest.fileType.toLowerCase())) {
+      manifest.fileType = 'application/octet-stream';
+    }
+    return manifest;
   },
 
   /**
@@ -159,18 +216,102 @@ export const FileTransferService = {
   },
 
   /**
+   * Decrypts an encrypted chunk payload and returns the raw bytes.
+   */
+  async decryptChunkBytes(
+    chunkPayload: FileChunkPayload,
+    sessionId: string,
+    sessionKey: Uint8Array
+  ): Promise<Uint8Array> {
+    const aad = new TextEncoder().encode(JSON.stringify({
+      fileId: chunkPayload.fileId,
+      chunkIndex: chunkPayload.chunkIndex,
+      sessionId,
+    }));
+    const { plaintext } = await decryptMessage(chunkPayload.ciphertext, sessionKey, aad);
+    return base64ToBytes(plaintext);
+  },
+
+  /**
    * Registers an incoming file manifest.
    */
   registerIncomingFile(
     manifest: FileManifestPayload,
     onProgress?: (progress: FileTransferProgress) => void
   ): void {
+    if (manifest.fileSize > MAX_FILE_SIZE) {
+      throw new Error('File exceeds maximum allowed size of 15MB');
+    }
     pendingTransfers.set(manifest.fileId, {
       manifest,
       receivedChunks: new Map(),
       totalChunks: manifest.totalChunks,
       onProgress,
     });
+  },
+
+  /**
+   * Ingests already-decrypted chunk bytes. Assembles the file if complete.
+   */
+  async ingestChunkBytes(
+    fileId: string,
+    chunkIndex: number,
+    chunkBytes: Uint8Array
+  ): Promise<FileAttachment | null> {
+    const transfer = pendingTransfers.get(fileId);
+    if (!transfer) return null;
+
+    transfer.receivedChunks.set(chunkIndex, chunkBytes);
+
+    if (transfer.onProgress) {
+      transfer.onProgress({
+        fileId: transfer.manifest.fileId,
+        fileName: transfer.manifest.fileName,
+        totalChunks: transfer.totalChunks,
+        transferredChunks: transfer.receivedChunks.size,
+        percentage: Math.round((transfer.receivedChunks.size / transfer.totalChunks) * 100),
+        direction: 'receiving',
+      });
+    }
+
+    if (transfer.receivedChunks.size === transfer.totalChunks) {
+      const totalLength = transfer.manifest.fileSize;
+      const completeBuffer = new Uint8Array(totalLength);
+      let currentOffset = 0;
+
+      for (let i = 0; i < transfer.totalChunks; i++) {
+        const part = transfer.receivedChunks.get(i);
+        if (part) {
+          completeBuffer.set(part, currentOffset);
+          currentOffset += part.length;
+        }
+      }
+
+      const computedHash = await computeSHA256(completeBuffer);
+      if (computedHash !== transfer.manifest.sha256) {
+        console.error('[FileTransfer] SHA-256 integrity check failed for file:', transfer.manifest.fileName);
+        pendingTransfers.delete(fileId);
+        return null;
+      }
+
+      const safeBlobType = ALLOWED_IMAGE_TYPES.has(transfer.manifest.fileType)
+        ? transfer.manifest.fileType
+        : 'application/octet-stream';
+      const blob = new Blob([completeBuffer], { type: safeBlobType });
+      const blobUrl = URL.createObjectURL(blob);
+      pendingTransfers.delete(fileId);
+
+      return {
+        fileId: transfer.manifest.fileId,
+        fileName: transfer.manifest.fileName,
+        fileSize: transfer.manifest.fileSize,
+        fileType: safeBlobType,
+        blobUrl,
+        dataUrl: transfer.manifest.thumbnail,
+        isImage: ALLOWED_IMAGE_TYPES.has(transfer.manifest.fileType),
+      };
+    }
+    return null;
   },
 
   /**
@@ -182,75 +323,9 @@ export const FileTransferService = {
     sessionId: string,
     sessionKey: Uint8Array
   ): Promise<FileAttachment | null> {
-    const transfer = pendingTransfers.get(chunkPayload.fileId);
-    if (!transfer) {
-      console.warn('[FileTransfer] Chunk received for unknown file:', chunkPayload.fileId);
-      return null;
-    }
-
-    const aad = new TextEncoder().encode(JSON.stringify({
-      fileId: chunkPayload.fileId,
-      chunkIndex: chunkPayload.chunkIndex,
-      sessionId,
-    }));
-
     try {
-      const { plaintext } = await decryptMessage(chunkPayload.ciphertext, sessionKey, aad);
-      const chunkBytes = base64ToBytes(plaintext);
-      transfer.receivedChunks.set(chunkPayload.chunkIndex, chunkBytes);
-
-      // Report progress
-      if (transfer.onProgress) {
-        transfer.onProgress({
-          fileId: transfer.manifest.fileId,
-          fileName: transfer.manifest.fileName,
-          totalChunks: transfer.totalChunks,
-          transferredChunks: transfer.receivedChunks.size,
-          percentage: Math.round((transfer.receivedChunks.size / transfer.totalChunks) * 100),
-          direction: 'receiving',
-        });
-      }
-
-      // Check if all chunks received
-      if (transfer.receivedChunks.size === transfer.totalChunks) {
-        // Concatenate all chunks in order
-        const totalLength = transfer.manifest.fileSize;
-        const completeBuffer = new Uint8Array(totalLength);
-        let currentOffset = 0;
-
-        for (let i = 0; i < transfer.totalChunks; i++) {
-          const part = transfer.receivedChunks.get(i);
-          if (part) {
-            completeBuffer.set(part, currentOffset);
-            currentOffset += part.length;
-          }
-        }
-
-        // Integrity verification
-        const computedHash = await computeSHA256(completeBuffer);
-        if (computedHash !== transfer.manifest.sha256) {
-          console.error('[FileTransfer] SHA-256 integrity check failed for file:', transfer.manifest.fileName);
-          pendingTransfers.delete(chunkPayload.fileId);
-          return null;
-        }
-
-        // Create browser in-memory blob
-        const blob = new Blob([completeBuffer], { type: transfer.manifest.fileType });
-        const blobUrl = URL.createObjectURL(blob);
-        pendingTransfers.delete(chunkPayload.fileId);
-
-        return {
-          fileId: transfer.manifest.fileId,
-          fileName: transfer.manifest.fileName,
-          fileSize: transfer.manifest.fileSize,
-          fileType: transfer.manifest.fileType,
-          blobUrl,
-          dataUrl: transfer.manifest.thumbnail,
-          isImage: transfer.manifest.fileType.startsWith('image/'),
-        };
-      }
-
-      return null;
+      const chunkBytes = await this.decryptChunkBytes(chunkPayload, sessionId, sessionKey);
+      return await this.ingestChunkBytes(chunkPayload.fileId, chunkPayload.chunkIndex, chunkBytes);
     } catch (err) {
       console.error('[FileTransfer] Failed to decrypt file chunk:', err);
       return null;

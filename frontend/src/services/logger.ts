@@ -2,7 +2,14 @@
  * QuantumShield - Live Security & Event Logger
  * Unified logging bus for client-side cryptographic events and backend relay messages.
  */
-import type { SystemLogEntry } from './api';
+export interface SystemLogEntry {
+  id: string;
+  timestamp: string;
+  level: string;
+  source: 'backend' | 'client';
+  logger: string;
+  message: string;
+}
 
 type LogListener = (entry: SystemLogEntry) => void;
 

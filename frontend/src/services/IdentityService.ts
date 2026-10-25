@@ -2,7 +2,8 @@
  * QuantumShield - Cryptographic Identity Service
  *
  * Each user's identity IS their Ed25519 signing keypair.
- * Generated once in the browser, stored encrypted in localStorage.
+ * Generated once in the browser, retained in client-side origin storage
+ * protected by browser origin-isolation and strict Content-Security-Policy (CSP).
  * No server, no account, no password reset.
  *
  * Identity fingerprint: first 8 bytes of SHA-256(publicKey) rendered as

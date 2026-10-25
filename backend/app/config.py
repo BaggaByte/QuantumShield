@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
-from typing import List, Union
+from typing import List, Union, Optional
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -14,12 +14,14 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:4173",
         "http://127.0.0.1:5173",
-        "*"
     ]
     max_rooms: int = 100
     max_participants_per_room: int = 8
     max_message_size_bytes: int = 65536
     room_ttl_seconds: int = 3600
+    unjoined_room_ttl_seconds: int = 300
+    rate_limit_rooms_per_min: int = 15
+    vapid_private_pem: Optional[str] = None
     
     @field_validator("allowed_origins", mode="before")
     @classmethod

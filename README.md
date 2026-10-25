@@ -13,29 +13,29 @@
 
 ## 🌟 The Core Breakthrough
 
-Traditional encrypted messaging platforms (WhatsApp, Signal, Telegram) rely exclusively on classical Elliptic Curve Diffie-Hellman (Curve25519). Today, nation-state adversaries execute **Harvest Now, Decrypt Later (HNDL)** attacks—recording encrypted network traffic in bulk to decrypt in the future using **Shor's Algorithm** on a quantum computer.
+Mainstream messaging platforms such as WhatsApp and Telegram rely on classical Elliptic Curve Diffie-Hellman (Curve25519). Today, nation-state adversaries execute **Harvest Now, Decrypt Later (HNDL)** attacks—recording encrypted network traffic in bulk to decrypt in the future using **Shor's Algorithm** on a quantum computer. While Signal pioneered PQXDH for native mobile clients in late 2023, it still requires mandatory phone number registration and centralized directory infrastructure.
 
-**QuantumShield mathematically neutralizes HNDL:**
+**QuantumShield brings hybrid post-quantum secrecy directly to browser PWAs:**
 1. **Hybrid Post-Quantum Key Exchange:** Combines classical X25519 with **NIST FIPS 203 ML-KEM-768** (Module-Lattice Key Encapsulation). An attacker must break *both* discrete logarithms and high-dimensional lattice hardness simultaneously.
 2. **Identity Without Accounts:** No phone number, no email, no PII. Identity is an in-browser **Ed25519 signing keypair** (`QS·XXXX·XXXX`) portable via QR code.
-3. **Zero-Knowledge Ephemeral Relay:** The server never stores messages, keys, or user directories. All messages are encrypted with **AES-256-GCM** before leaving your browser.
+3. **Zero-Knowledge Ephemeral Relay:** The server never stores messages, keys, or user directories. All messages and file chunks are encrypted with **AES-256-GCM** before leaving your browser.
 4. **Client-Side Hardware Vault at Rest:** Chat history is stored strictly on your device inside an IndexedDB vault encrypted with an AES-256-GCM key derived from your private identity key.
-5. **WhatsApp Web Ergonomics:** A pure, production-grade dual-pane layout featuring real-time delivery double checkmarks (`✓`/`✓✓` cyan), vector circuit doodle wallpaper, and encrypted file streaming.
+5. **WhatsApp Web Ergonomics:** A pure, production-grade dual-pane layout featuring real-time delivery double checkmarks (`✓`/`✓✓` cyan), vector circuit doodle wallpaper, audio/haptic feedback, and encrypted file streaming.
 
 ---
 
 ## 📊 Architectural Comparison
 
-| Dimension | Traditional Apps (Telegram, Slack, Discord) | WhatsApp & Signal | **QuantumShield** |
-| :--- | :--- | :--- | :--- |
-| **Quantum Immunity (HNDL)** | ❌ Broken (RSA/ECC vulnerable) | ❌ Vulnerable to future quantum decryption | ✅ **Quantum-Safe** (Dual-HKDF X25519 + NIST ML-KEM-768) |
-| **Identity & Account Model** | ❌ Email / Username / Phone | ❌ **Mandatory Phone Number / SIM** | ✅ **Zero Accounts** (Ed25519 keypair, QR export) |
-| **Server Persistence** | ❌ Plaintext or cloud database | ⚠️ Server message queues + cloud backups | ✅ **Zero Server Persistence** (Ephemeral relay only) |
-| **Encrypted History at Rest** | ❌ Cloud archives | ⚠️ SQLite on device / unencrypted cloud backups | ✅ **Client AES-256-GCM Vault** in IndexedDB |
-| **Group Chat Architecture** | ❌ Server manages and inspects groups | ⚠️ Server routes fanout via sender keys | ✅ **Client-Side Star Topology** (In-browser Hub re-encryption) |
-| **Push Notification Privacy** | ❌ Plaintext / sender metadata leaks | ⚠️ Leaks sender and room metadata | ✅ **Zero-Knowledge VAPID Push** (Opaque wake-up signals) |
-| **Distribution & Censorship** | ❌ Centralized corporate silos | ❌ Bound to Apple / Google App Stores | ✅ **Standalone PWA** (Runs in any modern browser) |
-| **Software License** | Proprietary | Mixed / Proprietary | ✅ **Custom Proprietary License** |
+| Dimension | Classical Apps (Telegram, Slack) | Signal (PQXDH Mobile) | WhatsApp | **QuantumShield** |
+| :--- | :--- | :--- | :--- | :--- |
+| **Quantum Immunity (HNDL)** | ❌ Broken (RSA/ECC vulnerable) | ✅ Hybrid PQXDH (Kyber-1024) | ❌ Classical ECC vulnerable | ✅ **Quantum-Safe** (Dual-HKDF X25519 + NIST ML-KEM-768) |
+| **Identity & Account Model** | ❌ Email / Username / Phone | ❌ **Mandatory Phone Number / SIM** | ❌ **Mandatory Phone Number** | ✅ **Zero Accounts** (Ed25519 keypair, QR export) |
+| **Server Persistence** | ❌ Plaintext or cloud database | ⚠️ Server queues until delivered | ⚠️ Server queues + cloud backups | ✅ **Zero Server Persistence** (Ephemeral relay only) |
+| **Encrypted History at Rest** | ❌ Cloud archives | ⚠️ SQLite on device | ⚠️ Unencrypted cloud backups | ✅ **Client AES-256-GCM Vault** in IndexedDB |
+| **Group Chat Architecture** | ❌ Server manages and inspects | ⚠️ Server routes fanout via sender keys | ⚠️ Server routes fanout | ✅ **Client-Side Star Topology** (In-browser Hub re-encryption) |
+| **Push Notification Privacy** | ❌ Plaintext / sender leaks | ⚠️ Leaks metadata to APNs/FCM | ⚠️ Leaks metadata to APNs/FCM | ✅ **Zero-Knowledge VAPID Push** (Opaque wake-up signals) |
+| **Distribution & Platform** | ❌ Centralized corporate silos | ❌ Native iOS/Android app | ❌ Bound to App Stores | ✅ **Standalone PWA** (Runs in any modern browser) |
+| **Deployment Mode** | Cloud-hosted | Cloud-hosted | Cloud-hosted | ✅ **Self-Hostable / Zero-Config Docker** |
 
 ---
 

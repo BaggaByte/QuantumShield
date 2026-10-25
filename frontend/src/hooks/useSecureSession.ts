@@ -16,7 +16,7 @@ import {
   generateX25519KeyPair, x25519SharedSecret,
   generateMLKEMKeyPair, mlkemEncapsulate, mlkemDecapsulate,
   deriveSessionKey, encryptMessage, decryptMessage,
-  bytesToBase64, base64ToBytes,
+  bytesToBase64, base64ToBytes, zeroizeBytes,
   KEY_SIZES,
 } from '@/crypto/hybrid';
 import { createWebSocket } from '@/services/api';
@@ -26,9 +26,10 @@ import {
   FileTransferService,
   type FileManifestPayload,
   type FileChunkPayload,
+  type EncryptedManifestEnvelope,
 } from '@/services/FileTransferService';
 import { soundHapticService } from '@/services/SoundHapticService';
-import type { QSIdentity } from '@/services/IdentityService';
+import { signWithIdentity, verifySignature, type QSIdentity } from '@/services/IdentityService';
 import type {
   CryptoMode, HandshakeState, SessionState, ChatMessage,
   RoomState, MessageMeta, EncryptedPayload, RoomParticipant, ParticipantRole,
@@ -193,14 +194,29 @@ export function useSecureSession(identity?: QSIdentity | null) {
       setSession(prev => prev ? { ...prev, keyGenDurationMs, handshakeState: 'exchanging' } : prev);
       setHandshakeState('exchanging');
 
-      ws.current.send(JSON.stringify({
+      const offerTranscript = {
         type: 'handshake_offer',
         to: targetPeerId,
         sessionId: sessionIdRef.current,
         mode: modeRef.current,
         x25519PublicKey: bytesToBase64(x25519Keys.publicKey),
-        mlkemPublicKey: mlkemPublicKeyB64,
+        mlkemPublicKey: mlkemPublicKeyB64 || '',
         role: roleRef.current,
+      };
+
+      let signatureB64: string | undefined;
+      if (identityRef.current) {
+        const sig = await signWithIdentity(
+          identityRef.current,
+          new TextEncoder().encode(JSON.stringify(offerTranscript))
+        );
+        signatureB64 = bytesToBase64(sig);
+      }
+
+      ws.current.send(JSON.stringify({
+        ...offerTranscript,
+        signature: signatureB64,
+        senderIdentityPublicKey: identityRef.current?.publicKey,
       }));
     } catch (err) {
       console.error('[QS] Peer handshake initiation failed:', err);
@@ -273,6 +289,36 @@ export function useSecureSession(identity?: QSIdentity | null) {
     try {
       setHandshakeState('exchanging');
       const senderId = (msg.from as string) || (msg.to as string) || 'hub';
+
+      // Spoke verification: verify offer comes from the elected hub
+      if (!isHubRef.current && hubIdRef.current && senderId !== hubIdRef.current) {
+        console.warn(`[QS-SEC] Ignored handshake offer from non-hub spoke: ${senderId}`);
+        return;
+      }
+
+      // Handshake offer signature verification
+      if (msg.signature && msg.senderIdentityPublicKey) {
+        const offerTranscriptToVerify = {
+          type: 'handshake_offer',
+          to: participantIdRef.current || (msg.to as string),
+          sessionId: (msg.sessionId as string) || sessionIdRef.current,
+          mode: (msg.mode as string) || modeRef.current,
+          x25519PublicKey: msg.x25519PublicKey as string,
+          mlkemPublicKey: (msg.mlkemPublicKey as string) || '',
+          role: (msg.role as string) || 'hub',
+        };
+        const valid = await verifySignature(
+          msg.senderIdentityPublicKey as string,
+          new TextEncoder().encode(JSON.stringify(offerTranscriptToVerify)),
+          base64ToBytes(msg.signature as string)
+        );
+        if (!valid) {
+          console.error('[QS-SEC] Handshake offer signature verification failed from peer:', senderId);
+          setHandshakeState('failed');
+          return;
+        }
+      }
+
       inFlightHandshakesRef.current.delete(senderId);
       if (handshakeTimeoutsRef.current.has(senderId)) {
         clearTimeout(handshakeTimeoutsRef.current.get(senderId)!);
@@ -294,18 +340,34 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
       let mlkemCiphertextB64: string | undefined;
       let mlkemSS: Uint8Array | undefined;
+      let ctBytes: Uint8Array | undefined;
+      let theirMLKEMPubKey: Uint8Array | undefined;
 
       if (mode === 'hybrid' && msg.mlkemPublicKey) {
-        const theirMLKEMPubKey = base64ToBytes(msg.mlkemPublicKey as string);
+        theirMLKEMPubKey = base64ToBytes(msg.mlkemPublicKey as string);
         const { ciphertext, sharedSecret } = mlkemEncapsulate(theirMLKEMPubKey);
+        ctBytes = ciphertext;
         mlkemCiphertextB64 = bytesToBase64(ciphertext);
         mlkemSS = sharedSecret;
       }
 
       setHandshakeState('deriving');
       const { keyBytes, fingerprint } = await deriveSessionKey(
-        x25519SS, sessionIdRef.current, mode, mlkemSS
+        x25519SS,
+        sessionIdRef.current,
+        mode,
+        mlkemSS,
+        {
+          initiatorX25519Pk: theirX25519PubKey,
+          responderX25519Pk: myKeys.publicKey,
+          mlkemPublicKey: theirMLKEMPubKey,
+          mlkemCiphertext: ctBytes,
+        }
       );
+
+      // Securely zeroize private key buffer
+      zeroizeBytes(myKeys.privateKey);
+
       sessionKeyBytes.current = keyBytes;
       peerSessionsRef.current.set(senderId, { sessionKey: keyBytes, fingerprint });
 
@@ -327,16 +389,29 @@ export function useSecureSession(identity?: QSIdentity | null) {
         },
       } : prev);
 
-      // Send answer back to the offering peer / hub
-      ws.current.send(JSON.stringify({
+      const answerTranscriptObj = {
         type: 'handshake_answer',
         to: senderId,
         sessionId: sessionIdRef.current,
         x25519PublicKey: bytesToBase64(myKeys.publicKey),
-        mlkemCiphertext: mlkemCiphertextB64,
-      }));
+        mlkemCiphertext: mlkemCiphertextB64 || '',
+      };
 
-      ws.current.send(JSON.stringify({ type: 'handshake_done' }));
+      let answerSigB64 = '';
+      if (identityRef.current) {
+        const ansSig = await signWithIdentity(
+          identityRef.current,
+          new TextEncoder().encode(JSON.stringify(answerTranscriptObj))
+        );
+        answerSigB64 = bytesToBase64(ansSig);
+      }
+
+      // Send authenticated answer back to the offering peer / hub
+      ws.current.send(JSON.stringify({
+        ...answerTranscriptObj,
+        signature: answerSigB64,
+        senderIdentityPublicKey: identityRef.current?.publicKey,
+      }));
     } catch (err) {
       console.error('[QS] Error handling handshake offer:', err);
       setHandshakeState('failed');
@@ -355,6 +430,27 @@ export function useSecureSession(identity?: QSIdentity | null) {
         handshakeTimeoutsRef.current.delete(senderId);
       }
 
+      // Verify Spoke answer signature
+      if (msg.signature && msg.senderIdentityPublicKey) {
+        const answerTranscriptToVerify = {
+          type: 'handshake_answer',
+          to: participantIdRef.current || (msg.to as string),
+          sessionId: sessionIdRef.current,
+          x25519PublicKey: msg.x25519PublicKey as string,
+          mlkemCiphertext: (msg.mlkemCiphertext as string) || '',
+        };
+        const valid = await verifySignature(
+          msg.senderIdentityPublicKey as string,
+          new TextEncoder().encode(JSON.stringify(answerTranscriptToVerify)),
+          base64ToBytes(msg.signature as string)
+        );
+        if (!valid) {
+          console.error('[QS-SEC] Handshake answer signature verification failed from spoke:', senderId);
+          setHandshakeState('failed');
+          return;
+        }
+      }
+
       const ephemeral = peerEphemeralKeysRef.current.get(senderId) || (
         myX25519.current ? { x25519: myX25519.current, mlkem: myMLKEM.current ?? undefined } : null
       );
@@ -367,14 +463,30 @@ export function useSecureSession(identity?: QSIdentity | null) {
       const x25519SS = x25519SharedSecret(ephemeral.x25519.privateKey, theirX25519PubKey);
 
       let mlkemSS: Uint8Array | undefined;
+      let ctBytes: Uint8Array | undefined;
       if (modeRef.current === 'hybrid' && ephemeral.mlkem && msg.mlkemCiphertext) {
-        const ct = base64ToBytes(msg.mlkemCiphertext as string);
-        mlkemSS = mlkemDecapsulate(ct, ephemeral.mlkem.secretKey);
+        ctBytes = base64ToBytes(msg.mlkemCiphertext as string);
+        mlkemSS = mlkemDecapsulate(ctBytes, ephemeral.mlkem.secretKey);
       }
 
       const { keyBytes, fingerprint } = await deriveSessionKey(
-        x25519SS, sessionIdRef.current, modeRef.current, mlkemSS
+        x25519SS,
+        sessionIdRef.current,
+        modeRef.current,
+        mlkemSS,
+        {
+          initiatorX25519Pk: ephemeral.x25519.publicKey,
+          responderX25519Pk: theirX25519PubKey,
+          mlkemPublicKey: ephemeral.mlkem?.publicKey,
+          mlkemCiphertext: ctBytes,
+        }
       );
+
+      // Zeroize ephemeral private keys
+      zeroizeBytes(ephemeral.x25519.privateKey);
+      if (ephemeral.mlkem) {
+        zeroizeBytes(ephemeral.mlkem.secretKey);
+      }
 
       sessionKeyBytes.current = keyBytes;
       peerSessionsRef.current.set(senderId, { sessionKey: keyBytes, fingerprint });
@@ -396,6 +508,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
         },
       } : prev);
 
+      // Only the hub sends handshake_done
       ws.current?.send(JSON.stringify({ type: 'handshake_done' }));
     } catch (err) {
       console.error('[QS] Error handling handshake answer:', err);
@@ -415,62 +528,77 @@ export function useSecureSession(identity?: QSIdentity | null) {
     }
     if (!keyToUse) return;
 
-    // Star Hub re-encryption for file chunks:
-    // If I am the Hub, relay chunk to all other spokes
-    if (isHubRef.current && ws.current) {
-      for (const [peerId] of peerSessionsRef.current.entries()) {
-        if (peerId !== senderId) {
-          ws.current.send(JSON.stringify({
-            type: 'file_chunk',
-            to: peerId,
-            chunk,
-            from: senderId,
-          }));
+    try {
+      // 1. Decrypt raw chunk bytes with sender's key
+      const chunkBytes = await FileTransferService.decryptChunkBytes(chunk, sessionIdRef.current, keyToUse);
+
+      // 2. Star Hub re-encryption for file chunks:
+      // Re-encrypt chunk with each other spoke's bilateral key and forward
+      if (isHubRef.current && ws.current) {
+        for (const [peerId, peerData] of peerSessionsRef.current.entries()) {
+          if (peerId !== senderId) {
+            const reEncChunk = await FileTransferService.encryptChunk(
+              chunkBytes,
+              chunk.fileId,
+              chunk.chunkIndex,
+              sessionIdRef.current,
+              peerData.sessionKey
+            );
+            ws.current.send(JSON.stringify({
+              type: 'file_chunk',
+              to: peerId,
+              chunk: reEncChunk,
+              from: senderId,
+            }));
+          }
         }
       }
-    }
 
-    const attachment = await FileTransferService.ingestChunk(chunk, sessionIdRef.current, keyToUse);
-    if (attachment) {
-      setTransferProgress(null);
-      const meta = incomingFilesMetaRef.current.get(chunk.fileId);
-      incomingFilesMetaRef.current.delete(chunk.fileId);
+      // 3. Ingest chunk bytes into local assembler
+      const attachment = await FileTransferService.ingestChunkBytes(chunk.fileId, chunk.chunkIndex, chunkBytes);
+      if (attachment) {
+        setTransferProgress(null);
+        const meta = incomingFilesMetaRef.current.get(chunk.fileId);
+        incomingFilesMetaRef.current.delete(chunk.fileId);
 
-      const chatMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        sessionId: sessionIdRef.current,
-        roomId: roomIdRef.current,
-        senderId: meta?.senderId || senderId,
-        senderRole: 'peer',
-        senderAlias: meta?.senderAlias,
-        senderFingerprint: meta?.senderFingerprint,
-        plaintext: `Shared file: ${attachment.fileName} (${(attachment.fileSize / 1024).toFixed(1)} KB)`,
-        attachment,
-        meta: {
-          messageId: crypto.randomUUID(),
+        const chatMsg: ChatMessage = {
+          id: crypto.randomUUID(),
           sessionId: sessionIdRef.current,
+          roomId: roomIdRef.current,
           senderId: meta?.senderId || senderId,
-          sequenceNumber: ++sequenceCounter.current,
-          algorithm: `AES-256-GCM|FileStream`,
-          timestamp: meta?.timestamp || Date.now(),
+          senderRole: 'peer',
+          senderAlias: meta?.senderAlias,
+          senderFingerprint: meta?.senderFingerprint,
+          plaintext: `Shared file: ${attachment.fileName} (${(attachment.fileSize / 1024).toFixed(1)} KB)`,
+          attachment,
+          meta: {
+            messageId: crypto.randomUUID(),
+            sessionId: sessionIdRef.current,
+            senderId: meta?.senderId || senderId,
+            sequenceNumber: ++sequenceCounter.current,
+            algorithm: `AES-256-GCM|FileStream`,
+            timestamp: meta?.timestamp || Date.now(),
+            authVerified: true,
+          },
+          displayedAt: Date.now(),
           authVerified: true,
-        },
-        displayedAt: Date.now(),
-        authVerified: true,
-        status: 'delivered',
-      };
+          status: 'delivered',
+        };
 
-      setMessages(prev => [...prev, chatMsg]);
-      setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+        setMessages(prev => [...prev, chatMsg]);
+        setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
 
-      pushService.showLocalBackgroundNotification(
-        'QuantumShield',
-        `Encrypted file received: ${attachment.fileName}`
-      );
+        pushService.showLocalBackgroundNotification(
+          'QuantumShield',
+          `Encrypted file received: ${attachment.fileName}`
+        );
 
-      if (identityRef.current && roomIdRef.current) {
-        StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
+        if (identityRef.current && roomIdRef.current) {
+          StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
+        }
       }
+    } catch (err) {
+      console.error('[QS-SEC] Failed to process incoming file chunk:', err);
     }
   }, []);
 
@@ -531,6 +659,30 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
         hubIdRef.current = hubId;
         isHubRef.current = isHub;
+
+        // Clean up departed peers from active sessions
+        const activeIds = new Set(roster.map(p => p.id));
+        for (const peerId of peerSessionsRef.current.keys()) {
+          if (!activeIds.has(peerId)) {
+            peerSessionsRef.current.delete(peerId);
+            peerEphemeralKeysRef.current.delete(peerId);
+            inFlightHandshakesRef.current.delete(peerId);
+            if (handshakeTimeoutsRef.current.has(peerId)) {
+              clearTimeout(handshakeTimeoutsRef.current.get(peerId)!);
+              handshakeTimeoutsRef.current.delete(peerId);
+            }
+          }
+        }
+        if (msg.peer_left) {
+          const leftId = msg.peer_left as string;
+          peerSessionsRef.current.delete(leftId);
+          peerEphemeralKeysRef.current.delete(leftId);
+          inFlightHandshakesRef.current.delete(leftId);
+          if (handshakeTimeoutsRef.current.has(leftId)) {
+            clearTimeout(handshakeTimeoutsRef.current.get(leftId)!);
+            handshakeTimeoutsRef.current.delete(leftId);
+          }
+        }
 
         setRoomState(prev => ({
           ...prev,
@@ -612,36 +764,56 @@ export function useSecureSession(identity?: QSIdentity | null) {
       }
 
       case 'file_manifest': {
-        const manifest = msg.manifest as FileManifestPayload;
+        const senderId = (msg.from as string) || 'peer';
         const senderAlias = (msg.senderAlias as string) || 'Peer';
         const senderFingerprint = msg.senderFingerprint as string;
-        const senderId = (msg.from as string) || 'peer';
 
-        FileTransferService.registerIncomingFile(manifest, (progress) => {
-          setTransferProgress(progress);
-        });
+        let keyToUse = sessionKeyBytes.current;
+        if (isHubRef.current && peerSessionsRef.current.has(senderId)) {
+          keyToUse = peerSessionsRef.current.get(senderId)!.sessionKey;
+        }
+        if (!keyToUse) break;
 
-        incomingFilesMetaRef.current.set(manifest.fileId, {
-          senderId,
-          senderAlias,
-          senderFingerprint,
-          timestamp: (msg.timestamp as number) || Date.now(),
-        });
+        try {
+          const manifest = await FileTransferService.decryptManifest(
+            msg.encryptedManifest as EncryptedManifestEnvelope,
+            keyToUse,
+            sessionIdRef.current
+          );
 
-        // Hub relays manifest to all other spokes
-        if (isHubRef.current && ws.current) {
-          for (const [peerId] of peerSessionsRef.current.entries()) {
-            if (peerId !== senderId) {
-              ws.current.send(JSON.stringify({
-                type: 'file_manifest',
-                to: peerId,
-                manifest,
-                senderAlias,
-                senderFingerprint,
-                from: senderId,
-              }));
+          FileTransferService.registerIncomingFile(manifest, (progress) => {
+            setTransferProgress(progress);
+          });
+
+          incomingFilesMetaRef.current.set(manifest.fileId, {
+            senderId,
+            senderAlias,
+            senderFingerprint,
+            timestamp: (msg.timestamp as number) || Date.now(),
+          });
+
+          // Hub re-encrypts manifest with each other spoke's bilateral key and relays
+          if (isHubRef.current && ws.current) {
+            for (const [peerId, peerData] of peerSessionsRef.current.entries()) {
+              if (peerId !== senderId) {
+                const reEncManifest = await FileTransferService.encryptManifest(
+                  manifest,
+                  peerData.sessionKey,
+                  sessionIdRef.current
+                );
+                ws.current.send(JSON.stringify({
+                  type: 'file_manifest',
+                  to: peerId,
+                  encryptedManifest: reEncManifest,
+                  senderAlias,
+                  senderFingerprint,
+                  from: senderId,
+                }));
+              }
             }
           }
+        } catch (mErr) {
+          console.error('[QS-SEC] Failed to decrypt file manifest:', mErr);
         }
         break;
       }
@@ -784,14 +956,38 @@ export function useSecureSession(identity?: QSIdentity | null) {
       direction: 'sending',
     });
 
-    // 1. Send File Manifest
-    ws.current.send(JSON.stringify({
-      type: 'file_manifest',
-      manifest,
-      senderAlias: identityRef.current?.alias || (isHubRef.current ? 'Hub' : 'Peer'),
-      senderFingerprint: identityRef.current?.fingerprint,
-      timestamp: Date.now(),
-    }));
+    // 1. Send Encrypted File Manifest
+    if (isHubRef.current && peerSessionsRef.current.size > 0) {
+      for (const [peerId, peerData] of peerSessionsRef.current.entries()) {
+        const encryptedManifest = await FileTransferService.encryptManifest(
+          manifest,
+          peerData.sessionKey,
+          sessionIdRef.current
+        );
+        ws.current.send(JSON.stringify({
+          type: 'file_manifest',
+          to: peerId,
+          encryptedManifest,
+          senderAlias: identityRef.current?.alias || 'Hub',
+          senderFingerprint: identityRef.current?.fingerprint,
+          timestamp: Date.now(),
+        }));
+      }
+    } else if (sessionKeyBytes.current) {
+      const encryptedManifest = await FileTransferService.encryptManifest(
+        manifest,
+        sessionKeyBytes.current,
+        sessionIdRef.current
+      );
+      ws.current.send(JSON.stringify({
+        type: 'file_manifest',
+        to: 'hub',
+        encryptedManifest,
+        senderAlias: identityRef.current?.alias || 'Peer',
+        senderFingerprint: identityRef.current?.fingerprint,
+        timestamp: Date.now(),
+      }));
+    }
 
     // 2. Encrypt & Stream Chunks
     for (let i = 0; i < rawChunks.length; i++) {

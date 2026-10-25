@@ -11,8 +11,7 @@
  *  @noble/ciphers   v2.4.0  — AES-256-GCM (from aes.js)
  *  @noble/ciphers/utils     — randomBytes
  *  Web Crypto API           — HKDF-SHA-256, SHA-256 digest
- *
- * EDUCATIONAL PROTOTYPE — Not production-ready. Not formally audited.
+ * Built with audited noble cryptographic primitives (@noble/curves, @noble/post-quantum, @noble/ciphers).
  */
 
 import { x25519 } from '@noble/curves/ed25519.js';
@@ -63,6 +62,19 @@ export async function fingerprintKey(keyBytes: Uint8Array): Promise<string> {
   return Array.from(digest.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(':');
 }
 
+export interface HandshakeTranscriptData {
+  initiatorX25519Pk?: Uint8Array;
+  responderX25519Pk?: Uint8Array;
+  mlkemPublicKey?: Uint8Array;
+  mlkemCiphertext?: Uint8Array;
+}
+
+export function zeroizeBytes(bytes?: Uint8Array | null): void {
+  if (bytes && bytes.fill) {
+    bytes.fill(0);
+  }
+}
+
 // --- HKDF Key Derivation -----------------------------------------------------
 
 export async function deriveSessionKey(
@@ -70,9 +82,13 @@ export async function deriveSessionKey(
   sessionId: string,
   mode: 'classical' | 'hybrid',
   mlkemSharedSecret?: Uint8Array,
+  transcriptData?: HandshakeTranscriptData,
 ): Promise<{ keyBytes: Uint8Array; fingerprint: string }> {
   let ikm: Uint8Array;
-  if (mode === 'hybrid' && mlkemSharedSecret) {
+  if (mode === 'hybrid') {
+    if (!mlkemSharedSecret || mlkemSharedSecret.length === 0) {
+      throw new Error('[QS-CRYPTO] Missing ML-KEM shared secret in hybrid mode');
+    }
     ikm = new Uint8Array(x25519SharedSecret.length + mlkemSharedSecret.length);
     ikm.set(x25519SharedSecret, 0);
     ikm.set(mlkemSharedSecret, x25519SharedSecret.length);
@@ -80,7 +96,25 @@ export async function deriveSessionKey(
     ikm = new Uint8Array(x25519SharedSecret);
   }
 
-  const infoStr = `QuantumShield-v1|${mode}|X25519${mode === 'hybrid' ? '+ML-KEM-768' : ''}|AES-256-GCM|session:${sessionId}`;
+  let transcriptDigest = '';
+  if (transcriptData) {
+    const parts: Uint8Array[] = [];
+    if (transcriptData.initiatorX25519Pk) parts.push(transcriptData.initiatorX25519Pk);
+    if (transcriptData.responderX25519Pk) parts.push(transcriptData.responderX25519Pk);
+    if (transcriptData.mlkemPublicKey) parts.push(transcriptData.mlkemPublicKey);
+    if (transcriptData.mlkemCiphertext) parts.push(transcriptData.mlkemCiphertext);
+    const totalLen = parts.reduce((acc, p) => acc + p.length, 0);
+    const combined = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const p of parts) {
+      combined.set(p, offset);
+      offset += p.length;
+    }
+    const digest = await sha256(combined);
+    transcriptDigest = `|transcript:${bytesToHex(digest)}`;
+  }
+
+  const infoStr = `QuantumShield-v1|${mode}|X25519${mode === 'hybrid' ? '+ML-KEM-768' : ''}|AES-256-GCM|session:${sessionId}${transcriptDigest}`;
   const infoBytes = new TextEncoder().encode(infoStr);
   const saltBytes = await sha256(new TextEncoder().encode(`QuantumShield-salt|${sessionId}`));
 

@@ -461,8 +461,8 @@ export default function ChatPage({
             )}
           </div>
 
-          {/* Instant Join Prompt if user typed 8 characters */}
-          {searchQuery.trim().length === 8 && !recentRooms.some(r => r.roomId === searchQuery.trim().toUpperCase()) && (
+          {/* Instant Join Prompt if user typed room code (6-16 characters) */}
+          {searchQuery.trim().length >= 6 && searchQuery.trim().length <= 16 && !recentRooms.some(r => r.roomId === searchQuery.trim().toUpperCase()) && (
             <div
               onClick={() => handleJoinRoom(searchQuery.trim())}
               className="mt-2 p-2.5 rounded-lg bg-wa-teal/10 border border-wa-teal/30 hover:bg-wa-teal/20 transition-all cursor-pointer flex items-center justify-between text-xs animate-fade-in"

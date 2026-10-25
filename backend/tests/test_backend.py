@@ -45,10 +45,10 @@ def test_create_room(client):
     assert r.status_code == 200
     body = r.json()
     assert body["created"] is True
-    assert len(body["room_id"]) == 8
+    assert len(body["room_id"]) == 12
 
 def test_get_nonexistent_room(client):
-    r = client.get("/rooms/XXXXXXXX")
+    r = client.get("/rooms/XXXXXXXXXXXX")
     assert r.status_code == 404
 
 def test_get_created_room(client):
@@ -65,7 +65,7 @@ def test_room_manager_create():
     rm = RoomManager(max_rooms=5)
     room = rm.create_room()
     assert room is not None
-    assert len(room.room_id) == 8
+    assert len(room.room_id) == 12
     assert rm.room_count() == 1
 
 def test_room_manager_max_rooms():
@@ -210,4 +210,53 @@ def test_push_subscribe_and_unsubscribe(client):
     r2 = client.post("/api/push/unsubscribe", json=unsub_payload)
     assert r2.status_code == 200
     assert r2.json()["status"] == "unsubscribed"
+
+# --- Security & Hardening Tests -----------------------------------------------
+
+def test_security_headers_present(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert "Content-Security-Policy" in r.headers
+    assert "default-src 'self'" in r.headers["Content-Security-Policy"]
+
+def test_system_logs_endpoint_removed(client):
+    """Ensure that the unauthenticated /api/system/logs endpoint is eliminated."""
+    r = client.get("/api/system/logs")
+    assert r.status_code == 404
+
+def test_push_ssrf_rejection(client):
+    """Ensure untrusted endpoints and non-HTTPS URLs are rejected by PushManager."""
+    untrusted_payload = {
+        "room_id": "TESTROOM",
+        "participant_id": "test-pid-ssrf",
+        "subscription": {
+            "endpoint": "http://169.254.169.254/latest/meta-data/",
+            "keys": {"p256dh": "key", "auth": "auth"},
+        },
+    }
+    r = client.post("/api/push/subscribe", json=untrusted_payload)
+    assert r.status_code == 400
+
+    attacker_domain = {
+        "room_id": "TESTROOM",
+        "participant_id": "test-pid-ssrf2",
+        "subscription": {
+            "endpoint": "https://malicious-domain.com/collect",
+            "keys": {"p256dh": "key", "auth": "auth"},
+        },
+    }
+    r2 = client.post("/api/push/subscribe", json=attacker_domain)
+    assert r2.status_code == 400
+
+def test_unjoined_room_expiration():
+    """Unjoined rooms must be cleaned up when their TTL expires."""
+    rm = RoomManager()
+    room = rm.create_room(unjoined_ttl=0.1)
+    # Simulate time passing
+    room.created_at -= 1.0
+    expired = rm.cleanup_expired_rooms(unjoined_ttl=0.1)
+    assert expired == 1
+    assert rm.get_room(room.room_id) is None
 

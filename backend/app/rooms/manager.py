@@ -3,6 +3,7 @@ QuantumShield Backend - Room Manager
 In-memory room management for the secure messaging relay.
 The server never sees plaintext or session keys.
 """
+import secrets
 import uuid
 import time
 import logging
@@ -63,17 +64,49 @@ class RoomManager:
         self._rooms: Dict[str, Room] = {}
         self._max_rooms = max_rooms
 
-    def create_room(self) -> Room:
+    def cleanup_expired_rooms(self, unjoined_ttl: float = 300.0, max_ttl: float = 3600.0) -> int:
+        """Removes unjoined rooms older than unjoined_ttl (5m) and any rooms older than max_ttl (1h)."""
+        now = time.time()
+        to_delete = []
+        for rid, room in self._rooms.items():
+            age = now - room.created_at
+            if room.participant_count() == 0 and age > unjoined_ttl:
+                to_delete.append((rid, f"unjoined for {int(age)}s"))
+            elif age > max_ttl:
+                to_delete.append((rid, f"exceeded max lifetime of {int(age)}s"))
+
+        for rid, reason in to_delete:
+            del self._rooms[rid]
+            logger.info(f"Cleaned up expired room {rid} ({reason})")
+        return len(to_delete)
+
+    def create_room(self, unjoined_ttl: float = 300.0, max_ttl: float = 3600.0) -> Room:
+        self.cleanup_expired_rooms(unjoined_ttl=unjoined_ttl, max_ttl=max_ttl)
         if len(self._rooms) >= self._max_rooms:
             raise RuntimeError("Maximum room count reached")
-        room_id = str(uuid.uuid4())[:8].upper()
+
+        for _ in range(10):
+            room_id = secrets.token_hex(6).upper()
+            if room_id not in self._rooms:
+                break
+        else:
+            room_id = str(uuid.uuid4()).replace("-", "")[:12].upper()
+
         room = Room(room_id=room_id)
         self._rooms[room_id] = room
         logger.info(f"Room created: {room_id}")
         return room
 
-    def get_room(self, room_id: str) -> Optional[Room]:
-        return self._rooms.get(room_id.upper())
+    def get_room(self, room_id: str, unjoined_ttl: float = 300.0, max_ttl: float = 3600.0) -> Optional[Room]:
+        rid = room_id.upper()
+        room = self._rooms.get(rid)
+        if room:
+            age = time.time() - room.created_at
+            if (room.participant_count() == 0 and age > unjoined_ttl) or (age > max_ttl):
+                del self._rooms[rid]
+                logger.info(f"Room {rid} expired during lookup (age={int(age)}s)")
+                return None
+        return room
 
     def join_room(self, room_id: str, websocket: WebSocket) -> tuple[Room, Participant]:
         room = self.get_room(room_id)

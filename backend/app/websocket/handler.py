@@ -14,6 +14,15 @@ logger = logging.getLogger("quantumshield.websocket")
 
 MAX_MESSAGE_BYTES = 262144  # 256KB to support encrypted file chunks
 
+async def safe_send_json(ws: WebSocket, data: dict) -> bool:
+    """Safely dispatches JSON over a WebSocket without throwing on disconnect or socket failure."""
+    try:
+        await ws.send_json(data)
+        return True
+    except Exception as e:
+        logger.debug(f"WebSocket send failure: {e}")
+        return False
+
 async def websocket_room_handler(websocket: WebSocket, room_id: str):
     await websocket.accept()
     room = None
@@ -23,19 +32,19 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
         # Validate room exists before joining
         existing_room = room_manager.get_room(room_id)
         if existing_room is None:
-            await websocket.send_json({"type": "error", "message": f"Room {room_id} not found"})
+            await safe_send_json(websocket, {"type": "error", "message": f"Room {room_id} not found"})
             await websocket.close(code=4004)
             return
 
         if existing_room.is_full():
-            await websocket.send_json({"type": "error", "message": f"Room is full (max {existing_room.max_participants} participants)"})
+            await safe_send_json(websocket, {"type": "error", "message": f"Room is full (max {existing_room.max_participants} participants)"})
             await websocket.close(code=4003)
             return
 
         room, participant = room_manager.join_room(room_id, websocket)
 
         # Notify the joining participant of their role, hub id, and full participant roster
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "room_joined",
             "room_id": room.room_id,
             "participant_id": participant.participant_id,
@@ -47,7 +56,7 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
 
         # Broadcast updated participant roster to all other peers in the room
         for other in room.get_other_participants(participant.participant_id):
-            await other.websocket.send_json({
+            await safe_send_json(other.websocket, {
                 "type": "participant_list",
                 "room_id": room.room_id,
                 "hub_id": room.hub_id,
@@ -60,13 +69,13 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
         # Main message loop
         async for raw in websocket.iter_text():
             if len(raw.encode()) > MAX_MESSAGE_BYTES:
-                await websocket.send_json({"type": "error", "message": "Message too large"})
+                await safe_send_json(websocket, {"type": "error", "message": "Message too large"})
                 continue
 
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                await safe_send_json(websocket, {"type": "error", "message": "Invalid JSON"})
                 continue
 
             msg_type = msg.get("type", "")
@@ -79,7 +88,7 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                 if current_room:
                     roster = current_room.get_participants_info()
                     for p in current_room.participants.values():
-                        await p.websocket.send_json({
+                        await safe_send_json(p.websocket, {
                             "type": "participant_list",
                             "room_id": room_id,
                             "hub_id": current_room.hub_id,
@@ -104,13 +113,13 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                         # Targeted routing to specific participant
                         peer = current_room.participants.get(target)
                         if peer:
-                            await peer.websocket.send_json(msg)
+                            await safe_send_json(peer.websocket, msg)
                         else:
-                            await websocket.send_json({"type": "error", "message": f"Recipient {target} not connected"})
+                            await safe_send_json(websocket, {"type": "error", "message": f"Recipient {target} not connected"})
                     else:
                         # Star broadcast to all other participants
                         for peer in current_room.get_other_participants(participant.participant_id):
-                            await peer.websocket.send_json(msg)
+                            await safe_send_json(peer.websocket, msg)
 
                     # Trigger zero-knowledge wake-up push notification for subscribers
                     if msg_type in ("encrypted_message", "file_manifest"):
@@ -124,16 +133,21 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                     current_room = room_manager.get_room(room_id)
                     if current_room:
                         current_room.crypto_mode = mode
-                    await websocket.send_json({"type": "mode_accepted", "mode": mode})
+                    await safe_send_json(websocket, {"type": "mode_accepted", "mode": mode})
                 else:
-                    await websocket.send_json({"type": "error", "message": "Invalid mode"})
+                    await safe_send_json(websocket, {"type": "error", "message": "Invalid mode"})
 
             elif msg_type == "handshake_done":
                 current_room = room_manager.get_room(room_id)
                 if current_room:
+                    # Enforce that only the room hub can declare handshake complete
+                    if participant.participant_id != current_room.hub_id:
+                        await safe_send_json(websocket, {"type": "error", "message": "Only the room hub can finalize handshake"})
+                        continue
+
                     current_room.handshake_complete = True
                     for p in current_room.participants.values():
-                        await p.websocket.send_json({
+                        await safe_send_json(p.websocket, {
                             "type": "session_established",
                             "mode": current_room.crypto_mode,
                             "room_id": room_id,
@@ -144,7 +158,7 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                 pass  # Ignore pong responses
 
             else:
-                await websocket.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+                await safe_send_json(websocket, {"type": "error", "message": f"Unknown message type: {msg_type}"})
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: participant={participant.participant_id if participant else 'unknown'}")
@@ -157,7 +171,7 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                 # Notify remaining participants with updated roster and hub id
                 roster = updated_room.get_participants_info()
                 for remaining_p in updated_room.participants.values():
-                    await remaining_p.websocket.send_json({
+                    await safe_send_json(remaining_p.websocket, {
                         "type": "participant_list",
                         "room_id": room_id,
                         "hub_id": updated_room.hub_id,

@@ -4,38 +4,12 @@ Post-Quantum Secure Messaging Backend
 """
 import logging
 import sys
-from collections import deque
-from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api.routes import router
 from app.websocket.handler import websocket_room_handler
-
-# --- In-Memory Ring Buffer Log Handler ---------------------------------------
-class InMemoryLogHandler(logging.Handler):
-    def __init__(self, capacity: int = 500):
-        super().__init__()
-        self.buffer = deque(maxlen=capacity)
-
-    def emit(self, record):
-        try:
-            entry = {
-                "id": f"{record.created}-{record.msecs}",
-                "timestamp": datetime.fromtimestamp(record.created).strftime("%H:%M:%S.%f")[:-3],
-                "level": record.levelname,
-                "source": "backend",
-                "logger": record.name,
-                "message": record.getMessage(),
-            }
-            self.buffer.append(entry)
-        except Exception:
-            pass
-
-in_memory_log_handler = InMemoryLogHandler(capacity=500)
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-in_memory_log_handler.setFormatter(formatter)
 
 # --- Logging -----------------------------------------------------------------
 logging.basicConfig(
@@ -43,10 +17,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logging.getLogger().addHandler(in_memory_log_handler)
-logging.getLogger("uvicorn").addHandler(in_memory_log_handler)
-logging.getLogger("uvicorn.access").addHandler(in_memory_log_handler)
-logging.getLogger("quantumshield").addHandler(in_memory_log_handler)
 
 logger = logging.getLogger("quantumshield")
 
@@ -79,14 +49,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self' ws: wss: http: https:; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "base-uri 'self';"
+    )
+    return response
+
 # --- Routes ------------------------------------------------------------------
 app.include_router(router)
-
-@app.get("/api/system/logs", tags=["system"])
-async def get_system_logs(limit: int = 150):
-    """Retrieve the recent system and security audit logs from the in-memory buffer."""
-    logs = list(in_memory_log_handler.buffer)[-limit:]
-    return {"logs": logs, "total_buffered": len(in_memory_log_handler.buffer)}
 
 @app.websocket("/ws/room/{room_id}")
 async def room_websocket(websocket: WebSocket, room_id: str):

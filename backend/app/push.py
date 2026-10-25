@@ -15,6 +15,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid
@@ -26,6 +27,30 @@ logger = logging.getLogger("quantumshield.push")
 
 VAPID_PEM_PATH = Path(__file__).resolve().parent.parent / "vapid_private.pem"
 
+ALLOWED_PUSH_HOST_SUFFIXES = (
+    ".push.apple.com",
+    ".google.com",
+    ".googleapis.com",
+    ".mozilla.com",
+    ".notify.windows.com",
+)
+
+def is_valid_push_endpoint(endpoint: str) -> bool:
+    """Validates that a push subscription endpoint uses HTTPS and targets an approved push provider."""
+    try:
+        parsed = urlparse(endpoint)
+        if parsed.scheme != "https":
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        return any(
+            hostname == suffix.lstrip(".") or hostname.endswith(suffix)
+            for suffix in ALLOWED_PUSH_HOST_SUFFIXES
+        )
+    except Exception:
+        return False
+
 
 class PushManager:
     """Manages VAPID credentials and room push subscriptions."""
@@ -34,6 +59,7 @@ class PushManager:
         self._pem_path = str(VAPID_PEM_PATH)
         self._vapid: Optional[Vapid] = None
         self._public_key_b64: str = ""
+        self._private_pem_str: Optional[str] = None
         # room_id -> {participant_id: subscription_dict}
         self._subscriptions: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._init_vapid()
@@ -41,15 +67,24 @@ class PushManager:
     def _init_vapid(self):
         """Initializes or loads VAPID P-256 keys."""
         try:
-            if os.path.exists(self._pem_path):
+            if settings.vapid_private_pem:
+                self._vapid = Vapid.from_string(private_key=settings.vapid_private_pem)
+                self._private_pem_str = settings.vapid_private_pem
+                logger.info("Loaded VAPID key from settings.vapid_private_pem")
+            elif os.path.exists(self._pem_path):
                 self._vapid = Vapid.from_file(private_key_file=self._pem_path)
                 logger.info(f"Loaded existing VAPID key from {self._pem_path}")
             else:
                 self._vapid = Vapid()
                 self._vapid.generate_keys()
-                with open(self._pem_path, "wb") as f:
-                    f.write(self._vapid.private_pem())
-                logger.info(f"Generated new VAPID keypair at {self._pem_path}")
+                pem_bytes = self._vapid.private_pem()
+                self._private_pem_str = pem_bytes.decode("utf-8")
+                try:
+                    with open(self._pem_path, "wb") as f:
+                        f.write(pem_bytes)
+                    logger.info(f"Generated and saved new VAPID keypair at {self._pem_path}")
+                except (OSError, IOError) as write_err:
+                    logger.warning(f"Could not persist VAPID key to disk ({write_err}). Using in-memory VAPID key.")
 
             # Export uncompressed P-256 public point (65 bytes) as url-safe base64 without padding
             raw_pub = self._vapid.public_key.public_bytes(
@@ -69,10 +104,12 @@ class PushManager:
         return self._public_key_b64
 
     def subscribe(self, room_id: str, participant_id: str, subscription_info: Dict[str, Any]) -> bool:
-        """Registers or updates a Web Push subscription for a participant in a room."""
+        """Registers or updates a Web Push subscription for a participant in a room with endpoint validation."""
         if not room_id or not participant_id or not subscription_info:
             return False
-        if "endpoint" not in subscription_info:
+        endpoint = str(subscription_info.get("endpoint", "")).strip()
+        if not endpoint or not is_valid_push_endpoint(endpoint):
+            logger.warning(f"Rejected invalid or untrusted push endpoint: {endpoint[:40]}")
             return False
 
         if room_id not in self._subscriptions:
@@ -149,7 +186,7 @@ class PushManager:
                 return webpush(
                     subscription_info=subscription_info,
                     data=payload,
-                    vapid_private_key=self._pem_path,
+                    vapid_private_key=self._pem_path if os.path.exists(self._pem_path) else (self._private_pem_str or self._pem_path),
                     vapid_claims=claims,
                     ttl=60,
                 )

@@ -21,6 +21,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source code
 COPY . .
 
+# Create and use non-root user
+RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
+USER appuser
+
 # Expose backend port
 EXPOSE 8001
 
