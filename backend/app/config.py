@@ -1,8 +1,10 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import List, Union
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     app_name: str = "QuantumShield"
     app_version: str = "1.0.0"
     debug: bool = False
@@ -27,8 +29,5 @@ class Settings(BaseSettings):
                 return ["*"]
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
-    
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
