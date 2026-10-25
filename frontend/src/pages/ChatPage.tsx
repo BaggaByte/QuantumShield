@@ -2,11 +2,13 @@ import React, { useState, useRef, useEffect } from "react";
 import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
   CheckCircle, XCircle, AlertCircle, Key,
-  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint
+  Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint,
+  Trash2, HardDrive, History, Clock
 } from "lucide-react";
 import { api } from "@/services/api";
+import { StorageService } from "@/services/StorageService";
 import { useSecureSession } from "@/hooks/useSecureSession";
-import type { CryptoMode, ChatMessage } from "@/types";
+import type { CryptoMode, ChatMessage, StoredRoomSummary } from "@/types";
 import type { QSIdentity } from "@/services/IdentityService";
 
 interface Props {
@@ -28,6 +30,8 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
   const [copiedWire, setCopiedWire] = useState(false);
   const [showQuantumSim, setShowQuantumSim] = useState(false);
   const [quantumAttacking, setQuantumAttacking] = useState(false);
+  const [recentRooms, setRecentRooms] = useState<StoredRoomSummary[]>([]);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [attackResult, setAttackResult] = useState<{
     status: "compromised" | "protected";
     details: string;
@@ -38,10 +42,25 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
 
   const {
     roomState, session, messages, handshakeState, connect,
-    initiateHandshake, sendMessage, disconnect
-  } = useSecureSession();
+    initiateHandshake, sendMessage, disconnect, clearHistory
+  } = useSecureSession(identity);
 
   const currentRoomCode = roomState.roomId || activeRoomId || roomIdInput;
+
+  const loadRecentRooms = async () => {
+    try {
+      const rooms = await StorageService.getRecentRooms();
+      setRecentRooms(rooms);
+    } catch (e) {
+      console.error("Failed to load recent rooms:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (view === "setup") {
+      loadRecentRooms();
+    }
+  }, [view]);
 
   useEffect(() => {
     if (session && onSessionChange) {
@@ -113,6 +132,28 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
       navigator.clipboard.writeText(currentRoomCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleResumeRoom = async (code: string) => {
+    setActiveRoomId(code);
+    setRoomIdInput(code);
+    setIsJoining(true);
+    try {
+      await connect(code, mode);
+      setView("chat");
+    } catch (e) {
+      alert("Failed to join room: " + (e as Error).message);
+    } finally {
+      setIsJoining(false);
+    }
+  };
+
+  const handleDeleteRoomHistory = async (roomIdToDelete: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm(`Delete encrypted history for room ${roomIdToDelete}? This action cannot be undone.`)) {
+      await StorageService.deleteRoomHistory(roomIdToDelete);
+      await loadRecentRooms();
     }
   };
 
@@ -229,6 +270,62 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
             </button>
           </div>
         </div>
+
+        {/* Recent Encrypted Conversations (Phase 2) */}
+        {recentRooms.length > 0 && (
+          <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                <History className="w-4 h-4 text-cyan-400" />
+                <span>Recent Encrypted Conversations</span>
+              </h2>
+              <span className="text-[10px] text-slate-400 font-mono px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
+                AES-256 Vault
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Encrypted client-side at rest with your identity key. Messages never touch any server disk.
+            </p>
+            <div className="space-y-2 pt-1">
+              {recentRooms.map((r) => (
+                <div
+                  key={r.roomId}
+                  onClick={() => handleResumeRoom(r.roomId)}
+                  className="flex items-center justify-between p-3 rounded-lg bg-navy-900 border border-white/5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition-all cursor-pointer group"
+                >
+                  <div className="space-y-0.5 min-w-0 pr-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono font-bold text-white group-hover:text-cyan-300">
+                        {r.roomId}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-slate-400">
+                        {r.messageCount} msg{r.messageCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {r.lastMessageSnippet && (
+                      <p className="text-xs text-slate-400 truncate max-w-xs">
+                        "{r.lastMessageSnippet}"
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(r.lastActivity).toLocaleDateString()} {new Date(r.lastActivity).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={(e) => handleDeleteRoomHistory(r.roomId, e)}
+                      title="Delete encrypted room history"
+                      className="p-1.5 rounded-md text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -260,6 +357,10 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-xs font-mono text-cyan-300" title="All messages are stored client-side using AES-256-GCM IndexedDB">
+              <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
+              <span>AES-256 Vault</span>
+            </div>
             {session?.sessionKeyFingerprint && (
               <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
                 <Shield className="w-3.5 h-3.5 text-emerald-400" />
@@ -284,6 +385,13 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                 <span>Start Handshake</span>
               </button>
             )}
+            <button
+              onClick={() => setConfirmClearOpen(true)}
+              title="Clear Room History (Cryptographic Erase)"
+              className="p-2 rounded-lg border border-white/10 text-slate-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
             <button onClick={handleDisconnect}
               className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">
               <LogOut className="w-4 h-4" />
@@ -427,6 +535,21 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                       <XCircle className="w-3 h-3" /> Bad Tag
                     </span>
                   )}
+                  {msg.senderRole === "self" && (
+                    <span
+                      className="flex items-center ml-1 text-xs"
+                      title={msg.status === "delivered" ? "Delivered to peer (acknowledged)" : "Sent to relay"}
+                    >
+                      {msg.status === "delivered" ? (
+                        <span className="text-cyan-400 flex items-center font-bold tracking-tighter">
+                          <Check className="w-3.5 h-3.5" />
+                          <Check className="w-3.5 h-3.5 -ml-2" />
+                        </span>
+                      ) : (
+                        <Check className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                    </span>
+                  )}
                 </div>
 
                 <button
@@ -531,6 +654,43 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                 className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-semibold hover:bg-cyan-500/30"
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear History Confirmation Modal */}
+      {confirmClearOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-navy-900 border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-fade-in">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-base">Erase Room History?</h3>
+                <p className="text-xs text-slate-400">Room: <span className="font-mono text-cyan-400 font-semibold">{currentRoomCode}</span></p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              This will perform a <strong>cryptographic erasure</strong> of all messages stored at rest in IndexedDB for this room. Because messages were never sent to or stored on any server, this action is permanent and cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setConfirmClearOpen(false)}
+                className="px-4 py-2 rounded-lg border border-white/10 text-slate-300 hover:text-white text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  await clearHistory();
+                  setConfirmClearOpen(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-bold transition-colors"
+              >
+                Erase History
               </button>
             </div>
           </div>

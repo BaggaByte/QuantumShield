@@ -51,9 +51,12 @@ export interface MessageMeta {
   authVerified?: boolean;
 }
 
+export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered';
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
+  roomId?: string;
   senderId: string;
   senderRole: 'self' | 'peer';
   plaintext: string;
@@ -61,6 +64,23 @@ export interface ChatMessage {
   meta: MessageMeta;
   displayedAt: number;
   authVerified: boolean;
+  status?: MessageDeliveryStatus;
+}
+
+export interface EncryptedStoredRecord {
+  id: string;
+  roomId: string;
+  timestamp: number;
+  status: MessageDeliveryStatus;
+  nonce: string;       // base64
+  ciphertext: string;  // base64 AES-256-GCM ciphertext
+}
+
+export interface StoredRoomSummary {
+  roomId: string;
+  lastActivity: number;
+  messageCount: number;
+  lastMessageSnippet?: string;
 }
 
 // --- Room / WebSocket Types ---------------------------------------------------

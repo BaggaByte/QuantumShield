@@ -18,6 +18,8 @@ import {
   fingerprintKey, KEY_SIZES,
 } from '@/crypto/hybrid';
 import { createWebSocket } from '@/services/api';
+import { StorageService } from '@/services/StorageService';
+import type { QSIdentity } from '@/services/IdentityService';
 import type {
   CryptoMode, HandshakeState, SessionState, ChatMessage,
   RoomState, MessageMeta, EncryptedPayload,
@@ -39,13 +41,18 @@ function buildAAD(meta: Omit<MessageMeta, 'encryptDurationMs' | 'decryptDuration
 
 // --- Hook ---------------------------------------------------------------------
 
-export function useSecureSession() {
+export function useSecureSession(identity?: QSIdentity | null) {
   const [roomState, setRoomState] = useState<RoomState>({
     role: 'unknown', participantCount: 0, connected: false,
   });
   const [session, setSession] = useState<SessionState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [handshakeState, setHandshakeState] = useState<HandshakeState>('idle');
+
+  const identityRef = useRef<QSIdentity | null>(identity ?? null);
+  useEffect(() => {
+    identityRef.current = identity ?? null;
+  }, [identity]);
 
   const ws = useRef<WebSocket | null>(null);
   const sessionKeyBytes = useRef<Uint8Array | null>(null);
@@ -54,6 +61,7 @@ export function useSecureSession() {
   const seenMessageIds = useRef<Set<string>>(new Set());
   const sequenceCounter = useRef<number>(0);
   const sessionIdRef = useRef<string>('');
+  const roomIdRef = useRef<string>('');
   const participantIdRef = useRef<string>('');
   const roleRef = useRef<'initiator' | 'responder' | 'unknown'>('unknown');
   const modeRef = useRef<CryptoMode>('classical');
@@ -73,6 +81,7 @@ export function useSecureSession() {
     seenMessageIds.current.clear();
     sequenceCounter.current = 0;
     sessionIdRef.current = '';
+    roomIdRef.current = '';
     participantIdRef.current = '';
     roleRef.current = 'unknown';
     setMessages([]);
@@ -86,10 +95,22 @@ export function useSecureSession() {
   const connect = useCallback(async (roomId: string, mode: CryptoMode) => {
     cleanup();
     modeRef.current = mode;
+    roomIdRef.current = roomId;
     const newSessionId = `${roomId}-${Date.now().toString(36)}`;
     sessionIdRef.current = newSessionId;
 
     setRoomState(prev => ({ ...prev, roomId, error: undefined }));
+
+    // Load persistent encrypted history for this room if identity is available
+    if (identityRef.current) {
+      try {
+        const storedMsgs = await StorageService.getRoomMessages(roomId, identityRef.current);
+        setMessages(storedMsgs);
+        storedMsgs.forEach(m => seenMessageIds.current.add(m.id));
+      } catch (err) {
+        console.error('[QS] Error loading encrypted chat history:', err);
+      }
+    }
 
     const socket = createWebSocket(roomId);
     ws.current = socket;
@@ -188,6 +209,15 @@ export function useSecureSession() {
 
       case 'encrypted_message': {
         await handleIncomingMessage(msg);
+        break;
+      }
+
+      case 'message_ack': {
+        const ackMsgId = msg.messageId as string;
+        if (ackMsgId) {
+          setMessages(prev => prev.map(m => m.id === ackMsgId ? { ...m, status: 'delivered' } : m));
+          StorageService.updateMessageStatus(ackMsgId, 'delivered').catch(() => {});
+        }
         break;
       }
 
@@ -400,6 +430,7 @@ export function useSecureSession() {
     const chatMsg: ChatMessage = {
       id: messageId,
       sessionId: sessionIdRef.current,
+      roomId: roomIdRef.current,
       senderId: participantIdRef.current,
       senderRole: 'self',
       plaintext,
@@ -407,10 +438,17 @@ export function useSecureSession() {
       meta: { ...meta, encryptDurationMs: durationMs, authVerified: true },
       displayedAt: now,
       authVerified: true,
+      status: 'sent',
     };
 
     setMessages(prev => [...prev, chatMsg]);
     setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+    if (identityRef.current && roomIdRef.current) {
+      StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(err => {
+        console.error('[QS] Error persisting sent encrypted message:', err);
+      });
+    }
 
     ws.current.send(JSON.stringify({
       type: 'encrypted_message',
@@ -450,9 +488,20 @@ export function useSecureSession() {
       authVerified = false;
     }
 
+    // Send delivery acknowledgment back to the sender
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'message_ack',
+        messageId: rawMeta.messageId,
+        roomId: roomIdRef.current,
+        timestamp: Date.now(),
+      }));
+    }
+
     const chatMsg: ChatMessage = {
       id: rawMeta.messageId,
       sessionId: rawMeta.sessionId,
+      roomId: roomIdRef.current,
       senderId: rawMeta.senderId,
       senderRole: 'peer',
       plaintext,
@@ -460,10 +509,17 @@ export function useSecureSession() {
       meta: { ...rawMeta, decryptDurationMs, authVerified },
       displayedAt: Date.now(),
       authVerified,
+      status: 'delivered',
     };
 
     setMessages(prev => [...prev, chatMsg]);
     setSession(prev => prev ? { ...prev, messageCount: prev.messageCount + 1 } : prev);
+
+    if (identityRef.current && roomIdRef.current) {
+      StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(err => {
+        console.error('[QS] Error persisting incoming encrypted message:', err);
+      });
+    }
   }, []);
 
   // --- Disconnect -----------------------------------------------------------
@@ -478,6 +534,13 @@ export function useSecureSession() {
     };
   }, []);
 
+  const clearHistory = useCallback(async () => {
+    if (roomIdRef.current) {
+      await StorageService.deleteRoomHistory(roomIdRef.current);
+      setMessages([]);
+    }
+  }, []);
+
   return {
     roomState,
     session,
@@ -487,5 +550,6 @@ export function useSecureSession() {
     initiateHandshake,
     sendMessage,
     disconnect,
+    clearHistory,
   };
 }

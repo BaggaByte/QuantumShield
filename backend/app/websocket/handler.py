@@ -65,9 +65,9 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
 
             msg_type = msg.get("type", "")
 
-            # Relay handshake and encrypted messages to the peer
+            # Relay handshake, encrypted messages, and delivery acknowledgments to the peer
             if msg_type in ("handshake_offer", "handshake_answer", "handshake_complete",
-                            "encrypted_message", "ping"):
+                            "encrypted_message", "message_ack", "ping"):
                 current_room = room_manager.get_room(room_id)
                 if current_room:
                     peer = current_room.get_other_participant(participant.participant_id)
