@@ -65,6 +65,8 @@ export interface ChatMessage {
   displayedAt: number;
   authVerified: boolean;
   status?: MessageDeliveryStatus;
+  senderAlias?: string;
+  senderFingerprint?: string;
 }
 
 export interface EncryptedStoredRecord {
@@ -85,13 +87,24 @@ export interface StoredRoomSummary {
 
 // --- Room / WebSocket Types ---------------------------------------------------
 
-export type ParticipantRole = 'initiator' | 'responder' | 'unknown';
+export type ParticipantRole = 'hub' | 'spoke' | 'initiator' | 'responder' | 'unknown';
+
+export interface RoomParticipant {
+  id: string;
+  role: ParticipantRole;
+  alias?: string;
+  fingerprint?: string;
+  connected_at?: number;
+}
 
 export interface RoomState {
   roomId?: string;
   participantId?: string;
   role: ParticipantRole;
   participantCount: number;
+  participants: RoomParticipant[];
+  hubId?: string;
+  isHub: boolean;
   connected: boolean;
   error?: string;
 }

@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     port: int = 8001
     allowed_origins: List[str] = ["http://localhost:5173", "http://localhost:4173", "http://127.0.0.1:5173"]
     max_rooms: int = 100
-    max_participants_per_room: int = 2
+    max_participants_per_room: int = 8
     max_message_size_bytes: int = 65536
     room_ttl_seconds: int = 3600
     

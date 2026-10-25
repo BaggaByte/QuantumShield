@@ -3,7 +3,7 @@ import {
   MessageSquare, Send, Copy, Plus, LogIn, Shield, Lock,
   CheckCircle, XCircle, AlertCircle, Key,
   Loader, LogOut, RefreshCw, Eye, X, Atom, Sparkles, Check, Fingerprint,
-  Trash2, HardDrive, History, Clock
+  Trash2, HardDrive, History, Clock, Users
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
@@ -244,9 +244,9 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
         <div className="grid grid-cols-1 gap-4">
           <div className="bg-navy-800 border border-white/10 rounded-xl p-5 space-y-3">
             <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-cyan-400" /> Create Room
+              <Plus className="w-4 h-4 text-cyan-400" /> Create Group Room
             </h2>
-            <p className="text-xs text-slate-400">Create a new room and share the code with your peer.</p>
+            <p className="text-xs text-slate-400">Create a secure room and share the code with up to 7 peers (Star Topology N-Party E2E).</p>
             <button onClick={handleCreate} disabled={isCreating}
               className="w-full py-2.5 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-400 font-medium text-sm hover:bg-cyan-500/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
               {isCreating ? <><Loader className="w-4 h-4 animate-spin" /> Creating…</> : "Create Room"}
@@ -348,8 +348,14 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                 {copied && <span className="text-xs text-emerald-400 font-semibold animate-pulse">Copied!</span>}
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
-                <span>{roomState.participantCount}/2 participants</span>
+                <span className="flex items-center gap-1 font-mono text-cyan-300">
+                  <Users className="w-3.5 h-3.5" />
+                  {roomState.participantCount}/8 participants
+                </span>
                 <span className="capitalize">{mode} mode</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-fuchsia-500/10 border border-fuchsia-500/30 text-fuchsia-300 font-bold uppercase">
+                  {roomState.isHub ? "⭐️ Star Hub" : "Spoke Peer"}
+                </span>
                 <span className={handshakeState === "complete" ? "text-emerald-400 font-semibold" : "text-amber-400"}>
                   {handshakeState === "complete" ? "Established ✓" : "Negotiating keys…"}
                 </span>
@@ -417,6 +423,43 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
             </div>
           ))}
         </div>
+
+        {/* Multi-Participant Roster (Phase 3 Star Topology) */}
+        {roomState.participants && roomState.participants.length > 0 && (
+          <div className="flex items-center gap-2 pt-2 border-t border-white/5 flex-wrap">
+            <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1 mr-1">
+              <Users className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Group Roster ({roomState.participantCount}/8):</span>
+            </span>
+            {roomState.participants.map((p) => {
+              const isSelf = p.id === roomState.participantId;
+              const isHub = p.role === "hub" || p.id === roomState.hubId;
+              return (
+                <div
+                  key={p.id}
+                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-xs font-mono transition-all ${
+                    isSelf
+                      ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300"
+                      : isHub
+                      ? "bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-300"
+                      : "bg-navy-900 border-white/10 text-slate-300"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${isHub ? "bg-fuchsia-400" : "bg-emerald-400"}`} />
+                  <span className="font-semibold">{p.alias || (isSelf ? "You" : `Peer ${p.id.slice(0, 4)}`)}</span>
+                  {p.fingerprint && (
+                    <span className="text-[10px] text-slate-400 font-mono">({p.fingerprint})</span>
+                  )}
+                  <span className={`text-[9px] px-1 py-0.2 rounded font-bold uppercase ${
+                    isHub ? "bg-fuchsia-500/20 text-fuchsia-300" : "bg-slate-700 text-slate-300"
+                  }`}>
+                    {isHub ? "HUB" : "PEER"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Quantum Adversary Simulation Panel */}
@@ -517,6 +560,14 @@ export default function ChatPage({ onSessionChange, identity }: Props) {
                   : "bg-navy-800 border-white/10 text-white"
               }`}
             >
+              {msg.senderRole === "peer" && (
+                <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-mono text-cyan-300 pb-1 border-b border-white/5">
+                  <span className="font-bold">{msg.senderAlias || `Peer ${msg.senderId.slice(0, 4)}`}</span>
+                  {msg.senderFingerprint && (
+                    <span className="text-[10px] text-slate-400 font-normal">({msg.senderFingerprint})</span>
+                  )}
+                </div>
+              )}
               <div className="flex items-start justify-between gap-3">
                 <p className={`text-sm break-words ${msg.authVerified ? "text-white" : "text-red-400"}`}>
                   {msg.authVerified ? msg.plaintext : "⚠️ Authentication failed — message rejected"}

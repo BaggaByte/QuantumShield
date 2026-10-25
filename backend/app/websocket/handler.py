@@ -27,27 +27,32 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
             return
 
         if existing_room.is_full():
-            await websocket.send_json({"type": "error", "message": "Room is full (max 2 participants)"})
+            await websocket.send_json({"type": "error", "message": f"Room is full (max {existing_room.max_participants} participants)"})
             await websocket.close(code=4003)
             return
 
         room, participant = room_manager.join_room(room_id, websocket)
 
-        # Notify the joining participant of their role and room info
+        # Notify the joining participant of their role, hub id, and full participant roster
         await websocket.send_json({
             "type": "room_joined",
             "room_id": room.room_id,
             "participant_id": participant.participant_id,
             "role": participant.role,
+            "hub_id": room.hub_id,
             "participant_count": room.participant_count(),
+            "participants": room.get_participants_info(),
         })
 
-        # Notify the other participant that someone joined
-        other = room.get_other_participant(participant.participant_id)
-        if other:
+        # Broadcast updated participant roster to all other peers in the room
+        for other in room.get_other_participants(participant.participant_id):
             await other.websocket.send_json({
-                "type": "peer_joined",
+                "type": "participant_list",
+                "room_id": room.room_id,
+                "hub_id": room.hub_id,
                 "participant_count": room.participant_count(),
+                "participants": room.get_participants_info(),
+                "peer_joined": participant.participant_id,
                 "peer_role": participant.role,
             })
 
@@ -65,19 +70,46 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
 
             msg_type = msg.get("type", "")
 
-            # Relay handshake, encrypted messages, and delivery acknowledgments to the peer
-            if msg_type in ("handshake_offer", "handshake_answer", "handshake_complete",
-                            "encrypted_message", "message_ack", "ping"):
+            # Set user alias and cryptographic fingerprint for participant roster
+            if msg_type == "set_identity":
+                participant.alias = str(msg.get("alias", "")).strip()
+                participant.fingerprint = str(msg.get("fingerprint", "")).strip()
                 current_room = room_manager.get_room(room_id)
                 if current_room:
-                    peer = current_room.get_other_participant(participant.participant_id)
-                    if peer:
-                        # Tag with sender id for recipient to verify
-                        msg["from"] = participant.participant_id
-                        msg["relayed_at"] = time.time()
-                        await peer.websocket.send_json(msg)
+                    roster = current_room.get_participants_info()
+                    for p in current_room.participants.values():
+                        await p.websocket.send_json({
+                            "type": "participant_list",
+                            "room_id": room_id,
+                            "hub_id": current_room.hub_id,
+                            "participant_count": current_room.participant_count(),
+                            "participants": roster,
+                        })
+
+            # Relay handshake, encrypted messages, and delivery acknowledgments
+            elif msg_type in ("handshake_offer", "handshake_answer", "handshake_complete",
+                              "encrypted_message", "message_ack", "ping"):
+                current_room = room_manager.get_room(room_id)
+                if current_room:
+                    # Tag with sender id and timestamp for recipient verification
+                    msg["from"] = participant.participant_id
+                    msg["relayed_at"] = time.time()
+
+                    target = msg.get("to")
+                    if target == "hub":
+                        target = current_room.hub_id
+
+                    if target and target != "all":
+                        # Targeted routing to specific participant
+                        peer = current_room.participants.get(target)
+                        if peer:
+                            await peer.websocket.send_json(msg)
+                        else:
+                            await websocket.send_json({"type": "error", "message": f"Recipient {target} not connected"})
                     else:
-                        await websocket.send_json({"type": "error", "message": "Peer not connected"})
+                        # Star broadcast to all other participants
+                        for peer in current_room.get_other_participants(participant.participant_id):
+                            await peer.websocket.send_json(msg)
 
             elif msg_type == "set_crypto_mode":
                 mode = msg.get("mode")
@@ -93,12 +125,12 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
                 current_room = room_manager.get_room(room_id)
                 if current_room:
                     current_room.handshake_complete = True
-                    # Notify both participants
                     for p in current_room.participants.values():
                         await p.websocket.send_json({
                             "type": "session_established",
                             "mode": current_room.crypto_mode,
                             "room_id": room_id,
+                            "hub_id": current_room.hub_id,
                         })
 
             elif msg_type == "pong":
@@ -115,10 +147,14 @@ async def websocket_room_handler(websocket: WebSocket, room_id: str):
         if room and participant:
             updated_room = room_manager.leave_room(room_id, participant.participant_id)
             if updated_room:
-                # Notify remaining participant
-                remaining = list(updated_room.participants.values())
-                if remaining:
-                    await remaining[0].websocket.send_json({
-                        "type": "peer_left",
+                # Notify remaining participants with updated roster and hub id
+                roster = updated_room.get_participants_info()
+                for remaining_p in updated_room.participants.values():
+                    await remaining_p.websocket.send_json({
+                        "type": "participant_list",
+                        "room_id": room_id,
+                        "hub_id": updated_room.hub_id,
                         "participant_count": updated_room.participant_count(),
+                        "participants": roster,
+                        "peer_left": participant.participant_id,
                     })

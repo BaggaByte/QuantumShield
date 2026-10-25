@@ -17,7 +17,9 @@ class Participant:
     participant_id: str
     websocket: WebSocket
     connected_at: float = field(default_factory=time.time)
-    role: str = "unknown"  # initiator | responder
+    role: str = "unknown"  # hub | spoke
+    alias: str = ""
+    fingerprint: str = ""
 
 @dataclass
 class Room:
@@ -26,9 +28,11 @@ class Room:
     participants: Dict[str, Participant] = field(default_factory=dict)
     crypto_mode: Optional[str] = None  # classical | hybrid
     handshake_complete: bool = False
+    hub_id: Optional[str] = None
+    max_participants: int = 8
 
     def is_full(self) -> bool:
-        return len(self.participants) >= 2
+        return len(self.participants) >= self.max_participants
 
     def participant_count(self) -> int:
         return len(self.participants)
@@ -38,6 +42,21 @@ class Room:
             if pid != participant_id:
                 return p
         return None
+
+    def get_other_participants(self, participant_id: str) -> List[Participant]:
+        return [p for pid, p in self.participants.items() if pid != participant_id]
+
+    def get_participants_info(self) -> List[dict]:
+        return [
+            {
+                "id": p.participant_id,
+                "role": p.role,
+                "alias": p.alias,
+                "fingerprint": p.fingerprint,
+                "connected_at": p.connected_at,
+            }
+            for p in self.participants.values()
+        ]
 
 class RoomManager:
     def __init__(self, max_rooms: int = 100):
@@ -61,12 +80,14 @@ class RoomManager:
         if room is None:
             raise ValueError(f"Room {room_id} not found")
         if room.is_full():
-            raise ValueError(f"Room {room_id} is full")
+            raise ValueError(f"Room {room_id} is full (max {room.max_participants} participants)")
         pid = str(uuid.uuid4())
-        role = "initiator" if room.participant_count() == 0 else "responder"
+        role = "hub" if room.participant_count() == 0 else "spoke"
         participant = Participant(participant_id=pid, websocket=websocket, role=role)
         room.participants[pid] = participant
-        logger.info(f"Participant {pid} ({role}) joined room {room_id}")
+        if role == "hub":
+            room.hub_id = pid
+        logger.info(f"Participant {pid} ({role}) joined room {room_id} ({room.participant_count()}/{room.max_participants})")
         return room, participant
 
     def leave_room(self, room_id: str, participant_id: str) -> Optional[Room]:
@@ -78,6 +99,14 @@ class RoomManager:
                 del self._rooms[room_id]
                 logger.info(f"Room {room_id} deleted (empty)")
                 return None
+
+            # If the hub left, elect the oldest remaining participant as the new hub
+            if room.hub_id == participant_id and room.participants:
+                new_hub = min(room.participants.values(), key=lambda p: p.connected_at)
+                new_hub.role = "hub"
+                room.hub_id = new_hub.participant_id
+                logger.info(f"Hub failover in room {room_id}: elected {new_hub.participant_id} as new hub")
+
             room.handshake_complete = False
         return room
 
