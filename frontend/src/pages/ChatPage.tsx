@@ -4,7 +4,7 @@ import {
   CheckCircle, XCircle, AlertCircle, Key,
   Loader, LogOut, RefreshCw, Eye, X, Check, Fingerprint,
   Trash2, HardDrive, History, Clock, Users, Paperclip, FileText, Download, UploadCloud,
-  Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight
+  Bell, BellOff, Smartphone, Search, ChevronLeft, QrCode, User, Filter, ArrowRight, Globe
 } from "lucide-react";
 import { api } from "@/services/api";
 import { StorageService } from "@/services/StorageService";
@@ -21,6 +21,7 @@ interface Props {
   onAliasChange?: (alias: string) => Promise<void> | void;
   onExportIdentity?: () => string | null;
   onDestroyIdentity?: () => Promise<void> | void;
+  onBackToHome?: () => void;
   onSessionChange?: (s: { mode: string; sessionId?: string; handshakeComplete?: boolean; roomId?: string; participantCount?: number } | null) => void;
 }
 
@@ -31,6 +32,7 @@ export default function ChatPage({
   onAliasChange,
   onExportIdentity,
   onDestroyIdentity,
+  onBackToHome,
   onSessionChange
 }: Props) {
   const [activeRoomId, setActiveRoomId] = useState<string>("");
@@ -337,6 +339,15 @@ export default function ChatPage({
             >
               <QrCode className="w-5 h-5" />
             </button>
+            {onBackToHome && (
+              <button
+                onClick={onBackToHome}
+                title="Return to Product Landing Page"
+                className="p-2 rounded-full hover:bg-wa-hover text-wa-muted hover:text-cyan-400 transition-colors"
+              >
+                <Globe className="w-5 h-5" />
+              </button>
+            )}
             <button
               onClick={() => {
                 setModalTab("create");
