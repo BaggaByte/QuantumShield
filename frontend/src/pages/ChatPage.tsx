@@ -503,7 +503,7 @@ export default function ChatPage({
               <div>
                 <p className="text-sm font-semibold text-white">No encrypted chats yet</p>
                 <p className="text-xs text-wa-muted mt-1 max-w-[220px]">
-                  Create a new secure room or enter an 8-character code to begin.
+                  Create a new secure room or enter a room code to begin.
                 </p>
               </div>
               <button
@@ -1245,19 +1245,19 @@ export default function ChatPage({
             ) : (
               <div className="space-y-4">
                 <p className="text-xs text-wa-muted leading-relaxed">
-                  Enter the 8-character cryptographic code provided by your peer or hub:
+                  Enter the cryptographic room code provided by your peer or hub:
                 </p>
                 <input
                   type="text"
                   value={joinCodeInput}
                   onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-                  placeholder="Enter 8-digit code (e.g. A1B2C3D4)"
-                  maxLength={8}
+                  placeholder="Enter room code (e.g. 7A5B30CA5069)"
+                  maxLength={16}
                   className="w-full px-4 py-2.5 rounded-xl bg-wa-panel border border-wa-subtle text-white font-mono text-center text-lg tracking-widest uppercase focus:outline-none focus:border-wa-teal"
                 />
                 <button
                   onClick={() => handleJoinRoom()}
-                  disabled={isJoiningRoom || joinCodeInput.trim().length !== 8}
+                  disabled={isJoiningRoom || joinCodeInput.trim().length < 8}
                   className="w-full py-3 rounded-xl bg-wa-teal hover:bg-[#00c298] text-white font-semibold text-sm shadow-lg shadow-teal-950/50 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                 >
                   {isJoiningRoom ? <Loader className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
