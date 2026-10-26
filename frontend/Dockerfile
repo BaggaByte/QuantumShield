@@ -12,6 +12,12 @@ RUN npm ci
 # Copy frontend source code
 COPY . .
 
+# Optional build arguments for remote deployment targets (e.g. Render, Vercel, Docker)
+ARG VITE_BACKEND_URL
+ARG VITE_WS_URL
+ENV VITE_BACKEND_URL=$VITE_BACKEND_URL \
+    VITE_WS_URL=$VITE_WS_URL
+
 # Build production bundle
 RUN npm run build
 

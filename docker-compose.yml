@@ -11,6 +11,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8001
       - DEBUG=false
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173}
     networks:
       - quantumshield-net
     healthcheck:
@@ -24,6 +25,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=${VITE_BACKEND_URL:-}
+        - VITE_WS_URL=${VITE_WS_URL:-}
     container_name: quantumshield-frontend
     restart: unless-stopped
     ports:

@@ -52,7 +52,18 @@ export interface MessageMeta {
   burnDuration?: number;
 }
 
-export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered';
+export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'queued' | 'failed';
+
+export interface QueuedMessage {
+  id: string;
+  roomId: string;
+  plaintext: string;
+  burnDuration?: number;
+  timestamp: number;
+  senderAlias?: string;
+  senderFingerprint?: string;
+  retryCount?: number;
+}
 
 export interface FileAttachment {
   fileId: string;
@@ -129,6 +140,11 @@ export interface RoomState {
   hubId?: string;
   isHub: boolean;
   connected: boolean;
+  reconnecting?: boolean;
+  reconnectAttempt?: number;
+  nextRetryInMs?: number;
+  isOffline?: boolean;
+  queuedMessagesCount?: number;
   error?: string;
 }
 

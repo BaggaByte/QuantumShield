@@ -260,3 +260,139 @@ def test_unjoined_room_expiration():
     assert expired == 1
     assert rm.get_room(room.room_id) is None
 
+# --- WebSocket Handler Integration Tests -------------------------------------
+
+def test_websocket_room_lifecycle(client):
+    """Test full WebSocket join, participant list, role assignment, messaging, and handshake enforcement."""
+    # Create room
+    create_r = client.post("/rooms")
+    room_id = create_r.json()["room_id"]
+
+    # 1. Hub connects
+    with client.websocket_connect(f"/ws/room/{room_id}") as hub_ws:
+        hub_joined = hub_ws.receive_json()
+        assert hub_joined["type"] == "room_joined"
+        assert hub_joined["role"] == "hub"
+        hub_id = hub_joined["participant_id"]
+        assert hub_joined["hub_id"] == hub_id
+
+        # 2. Spoke connects
+        with client.websocket_connect(f"/ws/room/{room_id}") as spoke_ws:
+            spoke_joined = spoke_ws.receive_json()
+            assert spoke_joined["type"] == "room_joined"
+            assert spoke_joined["role"] == "spoke"
+            spoke_id = spoke_joined["participant_id"]
+            assert spoke_joined["hub_id"] == hub_id
+
+            # Hub receives updated roster notification
+            hub_roster_update = hub_ws.receive_json()
+            assert hub_roster_update["type"] == "participant_list"
+            assert hub_roster_update["peer_joined"] == spoke_id
+            assert hub_roster_update["participant_count"] == 2
+
+            # 3. Spoke relays message to Hub
+            spoke_ws.send_json({
+                "type": "encrypted_message",
+                "to": "hub",
+                "payload": {"ciphertext": "abc123enc", "nonce": "nonce123"},
+                "meta": {"messageId": "msg-1", "sessionId": "sess-1", "sequenceNumber": 1},
+            })
+            hub_msg = hub_ws.receive_json()
+            assert hub_msg["type"] == "encrypted_message"
+            assert hub_msg["from"] == spoke_id
+            assert hub_msg["payload"]["ciphertext"] == "abc123enc"
+
+            # 4. Spoke attempts handshake_done -> Must be REJECTED (only hub can finalize)
+            spoke_ws.send_json({"type": "handshake_done"})
+            spoke_err = spoke_ws.receive_json()
+            assert spoke_err["type"] == "error"
+            assert "Only the room hub can finalize handshake" in spoke_err["message"]
+
+            # 5. Hub declares handshake_done -> Both receive session_established
+            hub_ws.send_json({"type": "handshake_done"})
+            hub_session = hub_ws.receive_json()
+            spoke_session = spoke_ws.receive_json()
+            assert hub_session["type"] == "session_established"
+            assert spoke_session["type"] == "session_established"
+
+def test_websocket_nonexistent_room(client):
+    """Connecting to a nonexistent room must result in an error message and socket close."""
+    with client.websocket_connect("/ws/room/NONEXISTENT12") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "error"
+        assert "not found" in msg["message"]
+
+def test_websocket_malformed_json(client):
+    """Sending malformed JSON over WebSocket returns an explicit error without crashing."""
+    create_r = client.post("/rooms")
+    room_id = create_r.json()["room_id"]
+
+    with client.websocket_connect(f"/ws/room/{room_id}") as ws:
+        ws.receive_json()  # room_joined
+        ws.send_text("this is not json { [")
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert "Invalid JSON" in err["message"]
+
+def test_websocket_oversized_message_rejected(client):
+    """Sending a message larger than MAX_MESSAGE_BYTES (256KB) returns an error without crashing."""
+    create_r = client.post("/rooms")
+    room_id = create_r.json()["room_id"]
+
+    with client.websocket_connect(f"/ws/room/{room_id}") as ws:
+        ws.receive_json()  # room_joined
+        oversized = "x" * (270 * 1024)
+        ws.send_text(oversized)
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert "Message too large" in err["message"]
+
+def test_websocket_peer_leave_broadcast(client):
+    """When a participant disconnects, remaining participants receive an updated roster with peer_left."""
+    create_r = client.post("/rooms")
+    room_id = create_r.json()["room_id"]
+
+    with client.websocket_connect(f"/ws/room/{room_id}") as hub_ws:
+        hub_joined = hub_ws.receive_json()
+        assert hub_joined["role"] == "hub"
+
+        with client.websocket_connect(f"/ws/room/{room_id}") as spoke_ws:
+            spoke_joined = spoke_ws.receive_json()
+            spoke_id = spoke_joined["participant_id"]
+            # Hub sees spoke join
+            hub_roster_join = hub_ws.receive_json()
+            assert hub_roster_join["peer_joined"] == spoke_id
+
+        # Spoke exits context manager -> disconnected
+        hub_roster_leave = hub_ws.receive_json()
+        assert hub_roster_leave["type"] == "participant_list"
+        assert hub_roster_leave["peer_left"] == spoke_id
+        assert hub_roster_leave["participant_count"] == 1
+
+def test_websocket_set_identity_broadcast(client):
+    """Setting identity updates participant alias and fingerprint across the room."""
+    create_r = client.post("/rooms")
+    room_id = create_r.json()["room_id"]
+
+    with client.websocket_connect(f"/ws/room/{room_id}") as hub_ws:
+        hub_ws.receive_json()  # room_joined
+
+        with client.websocket_connect(f"/ws/room/{room_id}") as spoke_ws:
+            spoke_ws.receive_json()  # room_joined
+            hub_ws.receive_json()    # participant_list (join)
+
+            spoke_ws.send_json({
+                "type": "set_identity",
+                "alias": "Agent-Cipher",
+                "fingerprint": "QS·ABCD·1234",
+            })
+
+            # Both hub and spoke receive updated participant list
+            spoke_update = spoke_ws.receive_json()
+            hub_update = hub_ws.receive_json()
+
+            assert spoke_update["type"] == "participant_list"
+            assert hub_update["type"] == "participant_list"
+            spoke_entry = next(p for p in hub_update["participants"] if p["alias"] == "Agent-Cipher")
+            assert spoke_entry["fingerprint"] == "QS·ABCD·1234"
+

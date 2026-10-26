@@ -261,6 +261,14 @@ export const FileTransferService = {
     const transfer = pendingTransfers.get(fileId);
     if (!transfer) return null;
 
+    if (chunkIndex < 0 || chunkIndex >= transfer.totalChunks) {
+      console.warn(`[FileTransfer] Received out-of-bounds chunk ${chunkIndex} (total: ${transfer.totalChunks})`);
+      return null;
+    }
+    if (transfer.receivedChunks.has(chunkIndex)) {
+      return null; // Ignore duplicate chunk
+    }
+
     transfer.receivedChunks.set(chunkIndex, chunkBytes);
 
     if (transfer.onProgress) {

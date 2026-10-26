@@ -132,8 +132,8 @@ export default function ChatPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
-    roomState, session, messages, handshakeState, transferProgress, connect,
-    initiateHandshake, retryHandshake, sendMessage, sendFile, deleteMessageFromChat, disconnect, clearHistory
+    roomState, session, messages, handshakeState, transferProgress, queuedCount, connect,
+    initiateHandshake, retryHandshake, sendMessage, sendFile, deleteMessageFromChat, disconnect, clearHistory, reconnectNow
   } = useSecureSession(identity);
 
   // --- Load Recent Rooms from IndexedDB --------------------------------------
@@ -837,6 +837,32 @@ export default function ChatPage({
               </div>
             )}
 
+            {/* Transport Resilience Banner: Auto-Reconnecting & Mobile Network Loss */}
+            {(roomState.reconnecting || roomState.isOffline) && (
+              <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-between text-xs font-mono text-amber-200 animate-fade-in backdrop-blur-md">
+                <div className="flex items-center gap-2 min-w-0">
+                  <RefreshCw className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+                  <span className="truncate">
+                    {roomState.isOffline
+                      ? "Mobile network offline. Messages are queued safely in IndexedDB."
+                      : roomState.error || "Connection lost. Reconnecting with exponential backoff..."}
+                  </span>
+                  {queuedCount > 0 && (
+                    <span className="bg-amber-500/30 text-amber-300 px-2 py-0.5 rounded-full font-bold text-[10px] shrink-0">
+                      {queuedCount} queued
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={reconnectNow}
+                  className="ml-3 px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white rounded-lg font-semibold text-[11px] border border-amber-500/30 transition-all shrink-0 flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCw className="w-3 h-3" />
+                  <span>Reconnect Now</span>
+                </button>
+              </div>
+            )}
+
             {/* Chat Messages Scroll Canvas with WhatsApp Vector Wallpaper */}
             <div className="flex-1 overflow-y-auto px-4 md:px-12 py-4 space-y-3 qs-doodle-bg">
               {/* Centered WhatsApp Date Separator */}
@@ -960,11 +986,21 @@ export default function ChatPage({
                         
                         {/* Status Checkmarks */}
                         {isSelf ? (
-                          <span title={msg.status === "delivered" ? "Delivered to peer (acknowledged)" : "Sent to relay"}>
+                          <span title={
+                            msg.status === "delivered"
+                              ? "Delivered to peer (acknowledged)"
+                              : msg.status === "queued"
+                              ? "Queued offline — will send upon reconnect"
+                              : "Sent to relay"
+                          }>
                             {msg.status === "delivered" ? (
                               <span className="text-wa-cyan flex items-center font-bold tracking-tighter">
                                 <Check className="w-3.5 h-3.5" />
                                 <Check className="w-3.5 h-3.5 -ml-2" />
+                              </span>
+                            ) : msg.status === "queued" ? (
+                              <span className="text-amber-400 flex items-center gap-0.5">
+                                <Clock className="w-3 h-3 animate-pulse" />
                               </span>
                             ) : (
                               <Check className="w-3.5 h-3.5 text-slate-400" />
@@ -1061,6 +1097,17 @@ export default function ChatPage({
                 </button>
               </div>
 
+              {/* Offline Queue Pending Count Badge */}
+              {queuedCount > 0 && (
+                <div className="flex items-center justify-between px-4 py-1.5 bg-amber-500/10 border-t border-amber-500/20 text-[11px] font-mono text-amber-300">
+                  <span className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 animate-pulse text-amber-400" />
+                    <span>{queuedCount} message{queuedCount > 1 ? 's' : ''} queued offline</span>
+                  </span>
+                  <span className="text-[10px] text-amber-400/80">Flushes automatically on reconnect</span>
+                </div>
+              )}
+
               <div className={`flex-1 relative flex items-center bg-wa-incoming border rounded-full px-4 py-2 transition-colors ${
                 burnTimer ? "border-amber-500/40 focus-within:border-amber-400" : "border-wa-subtle focus-within:border-wa-teal"
               }`}>
@@ -1069,27 +1116,34 @@ export default function ChatPage({
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  disabled={handshakeState !== "complete"}
                   placeholder={
-                    handshakeState === "complete"
+                    roomState.isOffline || !roomState.connected
+                      ? "Offline • Messages will queue until reconnect…"
+                      : handshakeState === "complete"
                       ? burnTimer
                         ? `🔥 Disappearing in ${burnTimer}s • Type a message…`
                         : "Type an encrypted message…"
-                      : "Establishing post-quantum channel…"
+                      : "Establishing secure channel • Messages will queue…"
                   }
-                  className="w-full bg-transparent text-sm text-wa-body placeholder-wa-muted focus:outline-none disabled:opacity-40"
+                  className="w-full bg-transparent text-sm text-wa-body placeholder-wa-muted focus:outline-none"
                 />
               </div>
 
               <button
                 onClick={handleSend}
-                disabled={!inputText.trim() || handshakeState !== "complete"}
+                disabled={!inputText.trim()}
                 className={`p-2.5 rounded-full text-white shadow-lg transition-transform active:scale-95 disabled:opacity-40 ${
                   burnTimer
                     ? "bg-gradient-to-r from-amber-500 to-rose-500 shadow-amber-950/40 hover:brightness-110"
                     : "bg-wa-teal hover:bg-[#00c298] shadow-teal-950/40"
                 }`}
-                title={burnTimer ? `Send Disappearing Message (${burnTimer}s)` : "Send Encrypted Message"}
+                title={
+                  !roomState.connected || handshakeState !== "complete"
+                    ? "Queue Message (will send upon reconnect)"
+                    : burnTimer
+                    ? `Send Disappearing Message (${burnTimer}s)`
+                    : "Send Encrypted Message"
+                }
               >
                 <Send className="w-5 h-5" />
               </button>

@@ -33,8 +33,13 @@ import { signWithIdentity, verifySignature, type QSIdentity } from '@/services/I
 import type {
   CryptoMode, HandshakeState, SessionState, ChatMessage,
   RoomState, MessageMeta, EncryptedPayload, RoomParticipant, ParticipantRole,
-  FileAttachment, FileTransferProgress
+  FileAttachment, FileTransferProgress, QueuedMessage
 } from '@/types';
+
+// --- Backoff Constants --------------------------------------------------------
+const INITIAL_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30000;
+const BACKOFF_MULTIPLIER = 1.5;
 
 // --- Build AAD ----------------------------------------------------------------
 
@@ -60,11 +65,15 @@ export function useSecureSession(identity?: QSIdentity | null) {
     participants: [],
     isHub: false,
     connected: false,
+    reconnecting: false,
+    reconnectAttempt: 0,
+    isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
   });
   const [session, setSession] = useState<SessionState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [handshakeState, setHandshakeState] = useState<HandshakeState>('idle');
   const [transferProgress, setTransferProgress] = useState<FileTransferProgress | null>(null);
+  const [queuedCount, setQueuedCount] = useState<number>(0);
 
   const identityRef = useRef<QSIdentity | null>(identity ?? null);
   useEffect(() => {
@@ -72,6 +81,13 @@ export function useSecureSession(identity?: QSIdentity | null) {
   }, [identity]);
 
   const ws = useRef<WebSocket | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const explicitDisconnectRef = useRef<boolean>(false);
+  const offlineQueueRef = useRef<QueuedMessage[]>([]);
+  const isFlushingQueueRef = useRef<boolean>(false);
+  const handleServerMessageRef = useRef<(msg: Record<string, unknown>) => Promise<void>>(() => Promise.resolve());
+
   const sessionKeyBytes = useRef<Uint8Array | null>(null);
   const myX25519 = useRef<{ privateKey: Uint8Array; publicKey: Uint8Array } | null>(null);
   const myMLKEM = useRef<{ publicKey: Uint8Array; secretKey: Uint8Array } | null>(null);
@@ -95,6 +111,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
   const isHubRef = useRef<boolean>(false);
   const seenMessageIds = useRef<Set<string>>(new Set());
   const sequenceCounter = useRef<number>(0);
+  const lastSeenSequencePerSenderRef = useRef<Map<string, number>>(new Map());
   const sessionIdRef = useRef<string>('');
   const roomIdRef = useRef<string>('');
   const participantIdRef = useRef<string>('');
@@ -110,9 +127,14 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
   const cleanup = useCallback(() => {
     if (ws.current) {
-      ws.current.close();
+      try { ws.current.close(); } catch {}
       ws.current = null;
     }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptRef.current = 0;
     handshakeTimeoutsRef.current.forEach(t => clearTimeout(t));
     handshakeTimeoutsRef.current.clear();
     inFlightHandshakesRef.current.clear();
@@ -126,6 +148,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
     isHubRef.current = false;
     seenMessageIds.current.clear();
     sequenceCounter.current = 0;
+    lastSeenSequencePerSenderRef.current.clear();
     sessionIdRef.current = '';
     roomIdRef.current = '';
     participantIdRef.current = '';
@@ -134,12 +157,17 @@ export function useSecureSession(identity?: QSIdentity | null) {
     setHandshakeState('idle');
     setTransferProgress(null);
     setSession(null);
+    setQueuedCount(0);
+    offlineQueueRef.current = [];
     setRoomState({
       role: 'unknown',
       participantCount: 0,
       participants: [],
       isHub: false,
-      connected: false
+      connected: false,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
     });
   }, []);
 
@@ -225,34 +253,254 @@ export function useSecureSession(identity?: QSIdentity | null) {
     }
   }, []);
 
+  // Forward declare connectRef for backoff reconnect
+  const connectRef = useRef<(roomId: string, mode: CryptoMode, isReconnect?: boolean) => Promise<void>>(async () => {});
+
+  const scheduleReconnect = useCallback(() => {
+    if (explicitDisconnectRef.current || !roomIdRef.current) return;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+    }
+
+    const attempt = reconnectAttemptRef.current + 1;
+    reconnectAttemptRef.current = attempt;
+
+    const baseDelay = Math.min(MAX_BACKOFF_MS, INITIAL_BACKOFF_MS * Math.pow(BACKOFF_MULTIPLIER, attempt - 1));
+    const jitter = baseDelay * (0.8 + 0.4 * Math.random());
+    const delay = Math.round(jitter);
+
+    setRoomState(prev => ({
+      ...prev,
+      connected: false,
+      reconnecting: true,
+      reconnectAttempt: attempt,
+      nextRetryInMs: delay,
+      error: `Network interrupted. Reconnecting in ${Math.ceil(delay / 1000)}s (attempt ${attempt})...`,
+    }));
+
+    reconnectTimerRef.current = setTimeout(() => {
+      if (!explicitDisconnectRef.current && roomIdRef.current) {
+        connectRef.current(roomIdRef.current, modeRef.current, true);
+      }
+    }, delay);
+  }, []);
+
+  const reconnectNow = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (roomIdRef.current) {
+      reconnectAttemptRef.current = 0;
+      connectRef.current(roomIdRef.current, modeRef.current, true);
+    }
+  }, []);
+
+  // --- Network Watchers (Online/Offline/Visibility for mobile PWAs) ---------
+  useEffect(() => {
+    const handleOnline = () => {
+      setRoomState(prev => ({ ...prev, isOffline: false, error: undefined }));
+      if (roomIdRef.current && !explicitDisconnectRef.current) {
+        if (!ws.current || ws.current.readyState === WebSocket.CLOSED || ws.current.readyState === WebSocket.CLOSING) {
+          console.log('[QS-Transport] Network came online — reconnecting immediately');
+          reconnectNow();
+        }
+      }
+    };
+
+    const handleOffline = () => {
+      setRoomState(prev => ({
+        ...prev,
+        isOffline: true,
+        error: 'Network connection lost. Messages will be queued offline.',
+      }));
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && roomIdRef.current && !explicitDisconnectRef.current) {
+        if (!ws.current || ws.current.readyState === WebSocket.CLOSED || ws.current.readyState === WebSocket.CLOSING) {
+          console.log('[QS-Transport] PWA resumed from background — reconnecting');
+          reconnectNow();
+        }
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [reconnectNow]);
+
+  // --- Flush Offline Message Queue -----------------------------------------
+  const flushOfflineQueue = useCallback(async () => {
+    if (isFlushingQueueRef.current) return;
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    const hasKey = sessionKeyBytes.current || peerSessionsRef.current.size > 0;
+    if (!hasKey) return;
+
+    isFlushingQueueRef.current = true;
+    try {
+      if (roomIdRef.current) {
+        const stored = await StorageService.getQueuedMessages(roomIdRef.current, identityRef.current);
+        const map = new Map<string, QueuedMessage>();
+        for (const item of offlineQueueRef.current) map.set(item.id, item);
+        for (const item of stored) map.set(item.id, item);
+        offlineQueueRef.current = Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
+      }
+
+      if (offlineQueueRef.current.length === 0) {
+        setQueuedCount(0);
+        return;
+      }
+
+      console.log(`[QS-OfflineQueue] Flushing ${offlineQueueRef.current.length} queued messages...`);
+      const items = [...offlineQueueRef.current];
+
+      for (const item of items) {
+        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) break;
+
+        const seqNum = ++sequenceCounter.current;
+        const now = Date.now();
+        const meta: Omit<MessageMeta, 'encryptDurationMs' | 'decryptDurationMs' | 'authVerified'> = {
+          messageId: item.id,
+          sessionId: sessionIdRef.current,
+          senderId: participantIdRef.current,
+          sequenceNumber: seqNum,
+          algorithm: `AES-256-GCM|${modeRef.current === 'hybrid' ? 'X25519+ML-KEM-768' : 'X25519'}`,
+          timestamp: item.timestamp,
+          burnDuration: item.burnDuration,
+        };
+        const aad = buildAAD(meta);
+
+        if (isHubRef.current && peerSessionsRef.current.size > 0) {
+          for (const [peerId, peerData] of peerSessionsRef.current.entries()) {
+            const { ciphertext, nonce } = await encryptMessage(item.plaintext, peerData.sessionKey, aad);
+            ws.current.send(JSON.stringify({
+              type: 'encrypted_message',
+              to: peerId,
+              payload: { ciphertext, nonce },
+              meta: {
+                ...meta,
+                senderAlias: identityRef.current?.alias || item.senderAlias || 'Hub',
+                senderFingerprint: identityRef.current?.fingerprint || item.senderFingerprint,
+              },
+            }));
+          }
+        } else if (sessionKeyBytes.current) {
+          const { ciphertext, nonce } = await encryptMessage(item.plaintext, sessionKeyBytes.current, aad);
+          ws.current.send(JSON.stringify({
+            type: 'encrypted_message',
+            to: 'hub',
+            payload: { ciphertext, nonce },
+            meta: {
+              ...meta,
+              senderAlias: identityRef.current?.alias || item.senderAlias || 'Peer',
+              senderFingerprint: identityRef.current?.fingerprint || item.senderFingerprint,
+            },
+          }));
+        }
+
+        // Transition status from 'queued' to 'sent'
+        setMessages(prev => prev.map(m => m.id === item.id ? { ...m, status: 'sent', meta: { ...m.meta, sequenceNumber: seqNum } } : m));
+        await StorageService.updateMessageStatus(item.id, 'sent').catch(() => {});
+        await StorageService.removeQueuedMessage(item.id).catch(() => {});
+
+        offlineQueueRef.current = offlineQueueRef.current.filter(q => q.id !== item.id);
+        setQueuedCount(offlineQueueRef.current.length);
+        soundHapticService.play('send');
+      }
+    } catch (e) {
+      console.error('[QS-OfflineQueue] Flush error:', e);
+    } finally {
+      isFlushingQueueRef.current = false;
+      setQueuedCount(offlineQueueRef.current.length);
+    }
+  }, []);
+
   // --- Connect -------------------------------------------------------------
 
-  const connect = useCallback(async (roomId: string, mode: CryptoMode) => {
-    cleanup();
-    modeRef.current = mode;
-    roomIdRef.current = roomId;
-    const newSessionId = `${roomId}-${Date.now().toString(36)}`;
-    sessionIdRef.current = newSessionId;
-
-    setRoomState(prev => ({ ...prev, roomId, error: undefined }));
-
-    // Load persistent encrypted history for this room if identity is available
-    if (identityRef.current) {
-      try {
-        const storedMsgs = await StorageService.getRoomMessages(roomId, identityRef.current);
-        setMessages(storedMsgs);
-        storedMsgs.forEach(m => seenMessageIds.current.add(m.id));
-      } catch (err) {
-        console.error('[QS] Error loading encrypted chat history:', err);
+  const connect = useCallback(async (roomId: string, mode: CryptoMode, isReconnect = false) => {
+    if (!isReconnect) {
+      explicitDisconnectRef.current = false;
+      reconnectAttemptRef.current = 0;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
+      cleanup();
+      modeRef.current = mode;
+      roomIdRef.current = roomId;
+      const newSessionId = `${roomId}-${Date.now().toString(36)}`;
+      sessionIdRef.current = newSessionId;
+
+      setRoomState(prev => ({
+        ...prev,
+        roomId,
+        error: undefined,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        nextRetryInMs: undefined,
+      }));
+
+      // Load persistent encrypted history for this room if identity is available
+      if (identityRef.current) {
+        try {
+          const storedMsgs = await StorageService.getRoomMessages(roomId, identityRef.current);
+          setMessages(storedMsgs);
+          storedMsgs.forEach(m => seenMessageIds.current.add(m.id));
+        } catch (err) {
+          console.error('[QS] Error loading encrypted chat history:', err);
+        }
+      }
+
+      // Load offline queue for this room
+      try {
+        const queued = await StorageService.getQueuedMessages(roomId, identityRef.current);
+        offlineQueueRef.current = queued;
+        setQueuedCount(queued.length);
+      } catch (err) {
+        console.error('[QS] Error loading offline queue:', err);
+      }
+    } else {
+      // Reconnect mode: keep chat history, close dead socket and reset ephemeral handshake state
+      if (ws.current) {
+        try { ws.current.close(); } catch {}
+        ws.current = null;
+      }
+      inFlightHandshakesRef.current.clear();
+      handshakeTimeoutsRef.current.forEach(t => clearTimeout(t));
+      handshakeTimeoutsRef.current.clear();
+      setHandshakeState('idle');
+      setRoomState(prev => ({ ...prev, reconnecting: true }));
     }
 
     const socket = createWebSocket(roomId);
     ws.current = socket;
 
     socket.onopen = () => {
-      setRoomState(prev => ({ ...prev, roomId, connected: true }));
-      socket.send(JSON.stringify({ type: 'set_crypto_mode', mode }));
+      explicitDisconnectRef.current = false;
+      reconnectAttemptRef.current = 0;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      setRoomState(prev => ({
+        ...prev,
+        roomId,
+        connected: true,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        nextRetryInMs: undefined,
+        error: undefined,
+      }));
+
+      socket.send(JSON.stringify({ type: 'set_crypto_mode', mode: modeRef.current }));
 
       // Share identity alias & fingerprint with room
       if (identityRef.current) {
@@ -265,22 +513,45 @@ export function useSecureSession(identity?: QSIdentity | null) {
     };
 
     socket.onclose = (ev) => {
-      setRoomState(prev => ({ ...prev, connected: false, error: `Disconnected (${ev.code})` }));
+      if (explicitDisconnectRef.current) {
+        setRoomState(prev => ({ ...prev, connected: false, reconnecting: false }));
+        return;
+      }
+
+      if (ev.code === 4004) {
+        setRoomState(prev => ({ ...prev, connected: false, reconnecting: false, error: `Room ${roomId} not found or expired` }));
+        return;
+      }
+
+      if (ev.code === 4003) {
+        setRoomState(prev => ({ ...prev, connected: false, reconnecting: false, error: 'Room is full (max 8 peers)' }));
+        return;
+      }
+
+      setRoomState(prev => ({
+        ...prev,
+        connected: false,
+        error: `Disconnected (${ev.code || 'network interrupted'})`,
+      }));
+
+      scheduleReconnect();
     };
 
     socket.onerror = () => {
-      setRoomState(prev => ({ ...prev, connected: false, error: 'WebSocket error' }));
+      setRoomState(prev => ({ ...prev, connected: false }));
     };
 
     socket.onmessage = async (ev) => {
       try {
         const msg = JSON.parse(ev.data as string);
-        await handleServerMessage(msg);
+        await handleServerMessageRef.current(msg);
       } catch (e) {
         console.error('[QS] WebSocket message error:', e);
       }
     };
-  }, [cleanup]);
+  }, [cleanup, scheduleReconnect]);
+
+  connectRef.current = connect;
 
   // --- Handle Offer (Spoke receives from Hub) ------------------------------
 
@@ -374,6 +645,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
       const handshakeDurationMs = performance.now() - handshakeStartRef.current;
 
       setHandshakeState('complete');
+      flushOfflineQueue();
       setSession(prev => prev ? {
         ...prev,
         handshakeState: 'complete',
@@ -493,6 +765,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
 
       const handshakeDurationMs = performance.now() - handshakeStartRef.current;
       setHandshakeState('complete');
+      flushOfflineQueue();
       setSession(prev => prev ? {
         ...prev,
         handshakeState: 'complete',
@@ -755,6 +1028,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
         setSession(prev => prev ? { ...prev, handshakeState: 'complete' } : prev);
         soundHapticService.play('handshake');
         soundHapticService.triggerHaptic('success');
+        flushOfflineQueue();
         break;
       }
 
@@ -845,16 +1119,71 @@ export function useSecureSession(identity?: QSIdentity | null) {
         break;
       }
     }
-  }, [handleHandshakeOffer, handleHandshakeAnswer, initiateHandshakeToPeer, handleIncomingFileChunk]);
+  }, [handleHandshakeOffer, handleHandshakeAnswer, initiateHandshakeToPeer, handleIncomingFileChunk, flushOfflineQueue]);
 
-  // --- Send Encrypted Message (with Star re-encryption routing) ------------
+  handleServerMessageRef.current = handleServerMessage;
+
+  // --- Send Encrypted Message (with Star re-encryption routing & Offline Queue) ---
 
   const sendMessage = useCallback(async (plaintext: string, burnDuration?: number): Promise<void> => {
-    if (!ws.current) {
-      throw new Error('WebSocket not connected');
-    }
-    if (handshakeState !== 'complete' && peerSessionsRef.current.size === 0 && !sessionKeyBytes.current) {
-      throw new Error('Handshake not complete — wait for secure channel');
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    const isSocketOpen = ws.current && ws.current.readyState === WebSocket.OPEN;
+    const isSecureReady = (handshakeState === 'complete' || peerSessionsRef.current.size > 0 || sessionKeyBytes.current !== null);
+
+    // Transport Resilience: If socket is offline, disconnected, or negotiating, queue message!
+    if (!isSocketOpen || !isSecureReady || !isOnline) {
+      const messageId = crypto.randomUUID();
+      seenMessageIds.current.add(messageId);
+      const now = Date.now();
+
+      const queuedItem: QueuedMessage = {
+        id: messageId,
+        roomId: roomIdRef.current,
+        plaintext,
+        burnDuration,
+        timestamp: now,
+        senderAlias: identityRef.current?.alias,
+        senderFingerprint: identityRef.current?.fingerprint,
+      };
+
+      offlineQueueRef.current.push(queuedItem);
+      setQueuedCount(offlineQueueRef.current.length);
+
+      const chatMsg: ChatMessage = {
+        id: messageId,
+        sessionId: sessionIdRef.current,
+        roomId: roomIdRef.current,
+        senderId: participantIdRef.current || 'pending',
+        senderRole: 'self',
+        senderAlias: identityRef.current?.alias,
+        senderFingerprint: identityRef.current?.fingerprint,
+        plaintext,
+        meta: {
+          messageId,
+          sessionId: sessionIdRef.current,
+          senderId: participantIdRef.current || 'pending',
+          sequenceNumber: 0,
+          algorithm: `AES-256-GCM|OfflineQueue`,
+          timestamp: now,
+          burnDuration,
+          authVerified: true,
+        },
+        displayedAt: now,
+        authVerified: true,
+        status: 'queued',
+        burnDuration,
+        expiresAt: burnDuration ? now + burnDuration * 1000 : undefined,
+      };
+
+      setMessages(prev => [...prev, chatMsg]);
+      soundHapticService.play('tap');
+
+      if (identityRef.current && roomIdRef.current) {
+        StorageService.saveMessage(chatMsg, roomIdRef.current, identityRef.current).catch(() => {});
+      }
+      StorageService.saveQueuedMessage(queuedItem, identityRef.current).catch(() => {});
+
+      return;
     }
 
     const messageId = crypto.randomUUID();
@@ -1097,6 +1426,19 @@ export function useSecureSession(identity?: QSIdentity | null) {
     }
     seenMessageIds.current.add(rawMeta.messageId);
 
+    // Monotonic sequence number enforcement per sender to prevent replays and drops
+    const incomingSeq = rawMeta.sequenceNumber;
+    if (typeof incomingSeq === 'number' && senderId) {
+      const lastSeq = lastSeenSequencePerSenderRef.current.get(senderId) || 0;
+      if (incomingSeq <= lastSeq) {
+        console.warn(
+          `[QS-SEC] Replay or out-of-order sequence detected from ${senderId}: got ${incomingSeq}, expected > ${lastSeq}`
+        );
+        return;
+      }
+      lastSeenSequencePerSenderRef.current.set(senderId, incomingSeq);
+    }
+
     const aad = buildAAD(rawMeta);
 
     // Select decryption key: Hub uses per-peer key; Spoke uses bilateral session key
@@ -1236,6 +1578,11 @@ export function useSecureSession(identity?: QSIdentity | null) {
   // --- Disconnect -----------------------------------------------------------
 
   const disconnect = useCallback(() => {
+    explicitDisconnectRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     cleanup();
   }, [cleanup]);
 
@@ -1243,11 +1590,22 @@ export function useSecureSession(identity?: QSIdentity | null) {
     if (roomIdRef.current) {
       await StorageService.deleteRoomHistory(roomIdRef.current);
       setMessages([]);
+      setQueuedCount(0);
+      offlineQueueRef.current = [];
     }
   }, []);
 
   useEffect(() => {
+    if (handshakeState === 'complete') {
+      flushOfflineQueue();
+    }
+  }, [handshakeState, flushOfflineQueue]);
+
+  useEffect(() => {
     return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
       ws.current?.close();
     };
   }, []);
@@ -1258,6 +1616,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
     messages,
     handshakeState,
     transferProgress,
+    queuedCount,
     connect,
     initiateHandshake,
     retryHandshake,
@@ -1266,5 +1625,7 @@ export function useSecureSession(identity?: QSIdentity | null) {
     deleteMessageFromChat,
     disconnect,
     clearHistory,
+    reconnectNow,
+    flushOfflineQueue,
   };
 }

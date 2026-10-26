@@ -25,9 +25,14 @@ export function useIdentity() {
 
   // Load on mount
   useEffect(() => {
-    const stored = loadIdentity();
-    setIdentity(stored);
-    setStatus(stored ? 'ready' : 'none');
+    let active = true;
+    loadIdentity().then(stored => {
+      if (active) {
+        setIdentity(stored);
+        setStatus(stored ? 'ready' : 'none');
+      }
+    });
+    return () => { active = false; };
   }, []);
 
   const create = useCallback(async (alias?: string) => {
@@ -40,7 +45,10 @@ export function useIdentity() {
   const setAlias = useCallback((alias: string) => {
     setIdentity(prev => {
       if (!prev) return prev;
-      return updateAlias(prev, alias);
+      updateAlias(prev, alias).then(updated => {
+        setIdentity(updated);
+      });
+      return { ...prev, alias: alias.trim() };
     });
   }, []);
 

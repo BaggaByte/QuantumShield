@@ -2,9 +2,9 @@
  * QuantumShield - Backend API Client
  */
 
-const getBaseUrl = (): string => {
+export const getBaseUrl = (): string => {
   // Check for explicit environment variable configuration
-  const customUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL;
+  const customUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL?.trim();
   if (customUrl) {
     return customUrl.endsWith('/') ? customUrl : `${customUrl}/`;
   }
@@ -85,24 +85,53 @@ export const api = {
     }),
 };
 
-export function createWebSocket(roomId: string): WebSocket {
+export function getWebSocketUrl(roomId: string): string {
   // Check for explicit WebSocket URL
-  const customWs = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_WS_URL;
+  const customWs = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_WS_URL?.trim();
   if (customWs) {
-    const base = customWs.endsWith('/') ? customWs.slice(0, -1) : customWs;
-    return new WebSocket(`${base}/ws/room/${roomId}`);
+    let base = customWs.replace(/\/+$/, '');
+    if (base.startsWith('http://')) {
+      base = 'ws://' + base.slice(7);
+    } else if (base.startsWith('https://')) {
+      base = 'wss://' + base.slice(8);
+    }
+    if (base.endsWith('/ws/room')) {
+      return `${base}/${roomId}`;
+    }
+    if (base.endsWith('/ws')) {
+      return `${base}/room/${roomId}`;
+    }
+    return `${base}/ws/room/${roomId}`;
   }
 
   // Derive WebSocket URL from VITE_BACKEND_URL if provided
-  const customBackend = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL;
+  const customBackend = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL?.trim();
   if (customBackend) {
-    const wsBase = customBackend.replace(/^http/, 'ws').replace(/\/$/, '');
-    return new WebSocket(`${wsBase}/ws/room/${roomId}`);
+    let wsBase = customBackend.replace(/\/+$/, '');
+    if (wsBase.startsWith('https://')) {
+      wsBase = 'wss://' + wsBase.slice(8);
+    } else if (wsBase.startsWith('http://')) {
+      wsBase = 'ws://' + wsBase.slice(7);
+    }
+    if (wsBase.endsWith('/ws/room')) {
+      return `${wsBase}/${roomId}`;
+    }
+    if (wsBase.endsWith('/ws')) {
+      return `${wsBase}/room/${roomId}`;
+    }
+    return `${wsBase}/ws/room/${roomId}`;
   }
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '5174')) {
-    return new WebSocket(`ws://${window.location.hostname}:8001/ws/room/${roomId}`);
+    return `ws://${window.location.hostname}:8001/ws/room/${roomId}`;
   }
-  return new WebSocket(`${protocol}//${window.location.host}/ws/room/${roomId}`);
+  if (typeof window !== 'undefined') {
+    return `${protocol}//${window.location.host}/ws/room/${roomId}`;
+  }
+  return `ws://localhost:8001/ws/room/${roomId}`;
+}
+
+export function createWebSocket(roomId: string): WebSocket {
+  return new WebSocket(getWebSocketUrl(roomId));
 }
