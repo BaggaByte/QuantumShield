@@ -10,14 +10,11 @@ export const getBaseUrl = (): string => {
   }
 
   if (typeof window !== 'undefined') {
-    // If running in Vite dev server (port 5173 / 5174), point directly to FastAPI backend on 8001
+    // If running in Vite dev server (port 5173 / 5174), point directly to local FastAPI backend on 8001
     if (window.location.port === '5173' || window.location.port === '5174') {
       return `http://${window.location.hostname}:8001/`;
     }
-    // If running on Vercel deployment without custom env var, default to live Render backend
-    if (window.location.hostname.endsWith('.vercel.app')) {
-      return 'https://quantumshield-3j5t.onrender.com/';
-    }
+    // In production (Vercel / Docker), same-origin paths are proxied seamlessly to the backend relay
     return '/';
   }
   return 'http://localhost:8001/';

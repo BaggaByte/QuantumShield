@@ -37,6 +37,22 @@
   ],
   "rewrites": [
     {
+      "source": "/rooms",
+      "destination": "https://quantumshield-3j5t.onrender.com/rooms"
+    },
+    {
+      "source": "/rooms/:path*",
+      "destination": "https://quantumshield-3j5t.onrender.com/rooms/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://quantumshield-3j5t.onrender.com/health"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://quantumshield-3j5t.onrender.com/api/:path*"
+    },
+    {
       "source": "/((?!api|ws|rooms|health).*)",
       "destination": "/index.html"
     }
