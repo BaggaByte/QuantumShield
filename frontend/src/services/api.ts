@@ -3,18 +3,25 @@
  */
 
 export const getBaseUrl = (): string => {
-  // Check for explicit environment variable configuration
+  if (typeof window !== 'undefined') {
+    // 1. Local Vite dev server -> connect directly to local FastAPI backend on 8001
+    if (window.location.port === '5173' || window.location.port === '5174') {
+      return `http://${window.location.hostname}:8001/`;
+    }
+    // 2. On Vercel (*.vercel.app), ALWAYS use same-origin reverse proxy ('/')
+    // This routes through vercel.json rewrites, bypassing all cross-origin browser CORS errors
+    if (window.location.hostname.endsWith('.vercel.app')) {
+      return '/';
+    }
+  }
+
+  // 3. Explicit environment variable configuration (e.g. Docker, native, custom domains)
   const customUrl = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL?.trim();
   if (customUrl) {
     return customUrl.endsWith('/') ? customUrl : `${customUrl}/`;
   }
 
   if (typeof window !== 'undefined') {
-    // If running in Vite dev server (port 5173 / 5174), point directly to local FastAPI backend on 8001
-    if (window.location.port === '5173' || window.location.port === '5174') {
-      return `http://${window.location.hostname}:8001/`;
-    }
-    // In production (Vercel / Docker), same-origin paths are proxied seamlessly to the backend relay
     return '/';
   }
   return 'http://localhost:8001/';
