@@ -14,7 +14,9 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:4173",
         "http://127.0.0.1:5173",
+        "https://quantumshield-five.vercel.app",
     ]
+    allowed_origin_regex: Optional[str] = r"^https:\/\/.*\.vercel\.app$"
     max_rooms: int = 100
     max_participants_per_room: int = 8
     max_message_size_bytes: int = 65536

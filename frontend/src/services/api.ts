@@ -14,6 +14,10 @@ export const getBaseUrl = (): string => {
     if (window.location.port === '5173' || window.location.port === '5174') {
       return `http://${window.location.hostname}:8001/`;
     }
+    // If running on Vercel deployment without custom env var, default to live Render backend
+    if (window.location.hostname.endsWith('.vercel.app')) {
+      return 'https://quantumshield-3j5t.onrender.com/';
+    }
     return '/';
   }
   return 'http://localhost:8001/';
@@ -104,8 +108,12 @@ export function getWebSocketUrl(roomId: string): string {
     return `${base}/ws/room/${roomId}`;
   }
 
-  // Derive WebSocket URL from VITE_BACKEND_URL if provided
-  const customBackend = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL?.trim();
+  // Derive WebSocket URL from VITE_BACKEND_URL or Vercel default if provided
+  let customBackend = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_BACKEND_URL?.trim();
+  if (!customBackend && typeof window !== 'undefined' && window.location.hostname.endsWith('.vercel.app')) {
+    customBackend = 'https://quantumshield-3j5t.onrender.com/';
+  }
+
   if (customBackend) {
     let wsBase = customBackend.replace(/\/+$/, '');
     if (wsBase.startsWith('https://')) {
